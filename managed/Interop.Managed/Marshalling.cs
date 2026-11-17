@@ -3,18 +3,31 @@ using System.Text;
 
 namespace Interop.Managed;
 
-internal sealed record ArrayArgument(object?[] Items);
+internal sealed class ArrayArgument(object?[] items)
+{
+    public object?[] Items { get; } = items;
+}
 
 internal static unsafe class Marshalling
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private const int MaxDepth = 32;
 
+    private static float FloatFromBits(uint bits) => *(float*)&bits;
+    private static uint FloatBits(float value) => *(uint*)&value;
+
+    private static void* AllocateArray(int length)
+    {
+        var values = (AbiValue*)Marshal.AllocHGlobal(checked(length * sizeof(AbiValue)));
+        for (int i = 0; i < length; i++) values[i] = default;
+        return values;
+    }
+
     public static string Text(in AbiValue value)
     {
         if (value.Kind != Kind.Utf8) throw new ArgumentException("Expected a UTF-8 string.");
         ValidateBuffer(value);
-        return Utf8.GetString(new ReadOnlySpan<byte>(value.Data, (int)value.Length));
+        return value.Length == 0 ? string.Empty : Utf8.GetString((byte*)value.Data, (int)value.Length);
     }
 
     private static void ValidateBuffer(in AbiValue value)
@@ -35,7 +48,7 @@ internal static unsafe class Marshalling
             Kind.I64 => unchecked((long)v.Scalar),
             Kind.U32 => unchecked((uint)v.Scalar),
             Kind.U64 => v.Scalar,
-            Kind.F32 => BitConverter.Int32BitsToSingle(unchecked((int)v.Scalar)),
+            Kind.F32 => FloatFromBits(unchecked((uint)v.Scalar)),
             Kind.F64 => BitConverter.Int64BitsToDouble(unchecked((long)v.Scalar)),
             Kind.I8 => unchecked((sbyte)v.Scalar),
             Kind.U8 => unchecked((byte)v.Scalar),
@@ -82,7 +95,7 @@ internal static unsafe class Marshalling
             case long v: destination.Kind = Kind.I64; destination.Scalar = unchecked((ulong)v); return;
             case uint v: destination.Kind = Kind.U32; destination.Scalar = v; return;
             case ulong v: destination.Kind = Kind.U64; destination.Scalar = v; return;
-            case float v: destination.Kind = Kind.F32; destination.Scalar = unchecked((uint)BitConverter.SingleToInt32Bits(v)); return;
+            case float v: destination.Kind = Kind.F32; destination.Scalar = FloatBits(v); return;
             case double v: destination.Kind = Kind.F64; destination.Scalar = unchecked((ulong)BitConverter.DoubleToInt64Bits(v)); return;
             case sbyte v: destination.Kind = Kind.I8; destination.Scalar = unchecked((ulong)v); return;
             case byte v: destination.Kind = Kind.U8; destination.Scalar = v; return;
@@ -91,13 +104,13 @@ internal static unsafe class Marshalling
             case char v: destination.Kind = Kind.Char16; destination.Scalar = v; return;
             case string v:
                 byte[] bytes = Utf8.GetBytes(v);
-                destination.Data = NativeMemory.Alloc((nuint)bytes.Length);
+                destination.Data = (void*)Marshal.AllocHGlobal(bytes.Length);
                 destination.Kind = Kind.Utf8;
                 destination.Length = bytes.Length;
-                bytes.CopyTo(new Span<byte>((void*)destination.Data, bytes.Length));
+                Marshal.Copy(bytes, 0, (IntPtr)destination.Data, bytes.Length);
                 return;
             case Array v when v.Rank == 1 && v.GetLowerBound(0) == 0:
-                destination.Data = NativeMemory.AllocZeroed((nuint)v.Length, (nuint)sizeof(AbiValue));
+                destination.Data = AllocateArray(v.Length);
                 destination.Kind = Kind.Array;
                 destination.Length = v.Length;
                 var values = (AbiValue*)destination.Data;
@@ -117,9 +130,9 @@ internal static unsafe class Marshalling
         {
             var values = (AbiValue*)value.Data;
             for (long i = 0; i < value.Length; i++) Free(ref values[i]);
-            NativeMemory.Free(value.Data);
+            Marshal.FreeHGlobal((IntPtr)value.Data);
         }
-        else if (value.Kind == Kind.Utf8) NativeMemory.Free(value.Data);
+        else if (value.Kind == Kind.Utf8) Marshal.FreeHGlobal((IntPtr)value.Data);
         else if (value.Kind == Kind.Object && value.Scalar != 0)
         {
             try { Handles.Release(value.Scalar); }

@@ -7,7 +7,6 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -44,7 +43,7 @@ public:
     void reset() noexcept { state_.reset(); }
     value call(std::string_view name, std::initializer_list<value> args = {},
                const call_options& options = {}) const;
-    value call(std::string_view name, std::span<const value> args,
+    value call(std::string_view name, const std::vector<value>& args,
                const call_options& options = {}) const;
     value get(std::string_view name) const;
     void set(std::string_view name, value v) const;
@@ -94,10 +93,10 @@ private:
 class type {
 public:
     object create(std::initializer_list<value> args = {}, const call_options& options = {}) const;
-    object create(std::span<const value> args, const call_options& options = {}) const;
+    object create(const std::vector<value>& args, const call_options& options = {}) const;
     value call(std::string_view name, std::initializer_list<value> args = {},
                const call_options& options = {}) const;
-    value call(std::string_view name, std::span<const value> args,
+    value call(std::string_view name, const std::vector<value>& args,
                const call_options& options = {}) const;
     value get(std::string_view name) const;
     void set(std::string_view name, value v) const;
@@ -109,11 +108,12 @@ private:
 
 class runtime {
 public:
-    // Uses the .runtimeconfig.json adjacent to the bridge assembly.
+    // net48 uses the Windows CLR. Modern .NET uses the adjacent .runtimeconfig.json.
+    // dotnet_root is only supported by the modern .NET host.
     explicit runtime(const std::filesystem::path& bridge_assembly,
                      const std::filesystem::path& dotnet_root = {});
     type load_type(const std::filesystem::path& assembly, std::string_view name) const;
-    // Framework or assembly-qualified type name, e.g. System.GC, System.Private.CoreLib.
+    // Framework or assembly-qualified type name, e.g. System.GC.
     type resolve_type(std::string_view assembly_qualified_name) const;
     std::int64_t live_handles() const;
     // Advanced callers must follow the ownership rules in abi.h.

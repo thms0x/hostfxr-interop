@@ -6,7 +6,9 @@ namespace Interop.Managed;
 
 internal static unsafe class Bridge
 {
+#if !NETFRAMEWORK
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+#endif
     public static int Invoke(Request* request, Result* result)
     {
         if (result == null) return 2;
@@ -65,7 +67,9 @@ internal static unsafe class Bridge
         };
     }
 
+#if !NETFRAMEWORK
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+#endif
     public static void FreeResult(Result* result)
     {
         if (result == null) return;

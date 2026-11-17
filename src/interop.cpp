@@ -1,11 +1,13 @@
 #include <interop/interop.hpp>
 #include <interop/abi.h>
 
+#ifndef INTEROP_NETFRAMEWORK
 #include <coreclr_delegates.h>
 #include <hostfxr.h>
 #include <nethost.h>
+#endif
 
-#include <bit>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -17,6 +19,10 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#ifdef INTEROP_NETFRAMEWORK
+#include <metahost.h>
+#include <mscoree.h>
+#endif
 #define HOST_TEXT(text) L##text
 #else
 #include <dlfcn.h>
@@ -35,6 +41,12 @@ std::string status_message(std::string_view operation, int status) {
     return out.str();
 }
 
+std::string utf8_path(const std::filesystem::path& path) {
+    auto text = path.u8string();
+    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
+
+#ifndef INTEROP_NETFRAMEWORK
 using host_string = std::basic_string<char_t>;
 host_string host_path(const std::filesystem::path& path) {
 #ifdef _WIN32
@@ -42,11 +54,6 @@ host_string host_path(const std::filesystem::path& path) {
 #else
     return path.string();
 #endif
-}
-
-std::string utf8_path(const std::filesystem::path& path) {
-    auto text = path.u8string();
-    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
 }
 
 struct host_exports {
@@ -120,6 +127,64 @@ interop_api bootstrap(const std::filesystem::path& assembly, const std::filesyst
     return api;
 }
 
+#else
+template<class T> struct com_ptr {
+    T* value = nullptr;
+    ~com_ptr() { if (value) value->Release(); }
+    com_ptr() = default;
+    com_ptr(const com_ptr&) = delete;
+    com_ptr& operator=(const com_ptr&) = delete;
+};
+
+void check_hresult(HRESULT status, std::string_view operation) {
+    if (FAILED(status)) throw std::runtime_error(status_message(operation, status));
+}
+
+interop_api bootstrap(const std::filesystem::path& assembly, const std::filesystem::path& dotnet_root) {
+    if (!dotnet_root.empty())
+        throw std::invalid_argument("dotnet_root is only supported by the modern .NET host");
+    const auto full_path = std::filesystem::canonical(assembly);
+    // Retain the host for process lifetime; stopping the CLR invalidates live leases.
+    static ICLRRuntimeHost* host = [] {
+        com_ptr<ICLRMetaHost> meta;
+        check_hresult(CLRCreateInstance(CLSID_CLRMetaHost, IID_ICLRMetaHost,
+            reinterpret_cast<void**>(&meta.value)), "Create CLR meta host");
+        com_ptr<ICLRRuntimeInfo> info;
+        check_hresult(meta.value->GetRuntime(L"v4.0.30319", IID_ICLRRuntimeInfo,
+            reinterpret_cast<void**>(&info.value)), "Locate .NET Framework CLR v4");
+        BOOL loadable = FALSE;
+        check_hresult(info.value->IsLoadable(&loadable), "Check CLR availability");
+        if (!loadable) throw std::runtime_error(".NET Framework CLR v4 cannot be loaded in this process");
+        com_ptr<ICLRRuntimeHost> runtime;
+        check_hresult(info.value->GetInterface(CLSID_CLRRuntimeHost, IID_ICLRRuntimeHost,
+            reinterpret_cast<void**>(&runtime.value)), "Get CLR runtime host");
+        check_hresult(runtime.value->Start(), "Start .NET Framework CLR");
+        auto* result = runtime.value;
+        runtime.value = nullptr;
+        return result;
+    }();
+    interop_api api{};
+    api.size = sizeof(api);
+    api.version = INTEROP_ABI_VERSION;
+    const auto address = std::to_wstring(reinterpret_cast<std::intptr_t>(&api));
+    DWORD status = 1;
+    check_hresult(host->ExecuteInDefaultAppDomain(full_path.wstring().c_str(), L"Interop.Managed.EntryPoint",
+        L"Initialize", address.c_str(), &status), "Load .NET Framework bridge");
+    if (status != 0 || api.size != sizeof(api) || api.version != INTEROP_ABI_VERSION || !api.invoke || !api.free_result)
+        throw std::runtime_error("Managed bridge ABI version or layout mismatch");
+    return api;
+}
+#endif
+
+template<class To, class From>
+To bit_copy(const From& source) noexcept {
+    static_assert(sizeof(To) == sizeof(From));
+    static_assert(std::is_trivially_copyable_v<To> && std::is_trivially_copyable_v<From>);
+    To result;
+    std::memcpy(&result, &source, sizeof(result));
+    return result;
+}
+
 struct encoded_value {
     interop_value raw{};
     std::vector<std::unique_ptr<encoded_value>> children;
@@ -155,8 +220,8 @@ struct runtime_state : std::enable_shared_from_this<runtime_state> {
             using T = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<T, std::monostate>) {}
             else if constexpr (std::is_integral_v<T>) raw.scalar = static_cast<std::uint64_t>(item);
-            else if constexpr (std::is_same_v<T, float>) raw.scalar = std::bit_cast<std::uint32_t>(item);
-            else if constexpr (std::is_same_v<T, double>) raw.scalar = std::bit_cast<std::uint64_t>(item);
+            else if constexpr (std::is_same_v<T, float>) raw.scalar = bit_copy<std::uint32_t>(item);
+            else if constexpr (std::is_same_v<T, double>) raw.scalar = bit_copy<std::uint64_t>(item);
             else if constexpr (std::is_same_v<T, std::string>) { raw.data = item.data(); raw.length = static_cast<std::int64_t>(item.size()); }
             else if constexpr (std::is_same_v<T, object>) {
                 if (!item.state_) { raw.kind = INTEROP_NULL; return; }
@@ -183,15 +248,15 @@ struct runtime_state : std::enable_shared_from_this<runtime_state> {
         switch (raw.kind) {
         case INTEROP_NULL: return {};
         case INTEROP_BOOL: return value(raw.scalar != 0);
-        case INTEROP_I32: return value(std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(raw.scalar)));
-        case INTEROP_I64: return value(std::bit_cast<std::int64_t>(raw.scalar));
+        case INTEROP_I32: return value(bit_copy<std::int32_t>(static_cast<std::uint32_t>(raw.scalar)));
+        case INTEROP_I64: return value(bit_copy<std::int64_t>(raw.scalar));
         case INTEROP_U32: return value(static_cast<std::uint32_t>(raw.scalar));
         case INTEROP_U64: return value(raw.scalar);
-        case INTEROP_F32: return value(std::bit_cast<float>(static_cast<std::uint32_t>(raw.scalar)));
-        case INTEROP_F64: return value(std::bit_cast<double>(raw.scalar));
-        case INTEROP_I8: return value(std::bit_cast<std::int8_t>(static_cast<std::uint8_t>(raw.scalar)));
+        case INTEROP_F32: return value(bit_copy<float>(static_cast<std::uint32_t>(raw.scalar)));
+        case INTEROP_F64: return value(bit_copy<double>(raw.scalar));
+        case INTEROP_I8: return value(bit_copy<std::int8_t>(static_cast<std::uint8_t>(raw.scalar)));
         case INTEROP_U8: return value(static_cast<std::uint8_t>(raw.scalar));
-        case INTEROP_I16: return value(std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(raw.scalar)));
+        case INTEROP_I16: return value(bit_copy<std::int16_t>(static_cast<std::uint16_t>(raw.scalar)));
         case INTEROP_U16: return value(static_cast<std::uint16_t>(raw.scalar));
         case INTEROP_CHAR16: return value(static_cast<char16_t>(raw.scalar));
         case INTEROP_UTF8: return value(text(raw));
@@ -274,9 +339,9 @@ object_state::~object_state() { runtime->release(token); }
 } // namespace detail
 
 value object::call(std::string_view name, std::initializer_list<value> args, const call_options& options) const {
-    return call(name, std::span<const value>(args.begin(), args.size()), options);
+    return call(name, std::vector<value>(args), options);
 }
-value object::call(std::string_view name, std::span<const value> args, const call_options& options) const {
+value object::call(std::string_view name, const std::vector<value>& args, const call_options& options) const {
     const auto state = detail::runtime_state::require(*this);
     return state->runtime->perform(INTEROP_CALL, state, name, {args.begin(), args.end()}, options);
 }
@@ -297,16 +362,16 @@ void object::take_ownership() const {
     state->runtime->perform(INTEROP_TAKE_OWNERSHIP, state);
 }
 object type::create(std::initializer_list<value> args, const call_options& options) const {
-    return create(std::span<const value>(args.begin(), args.size()), options);
+    return create(std::vector<value>(args), options);
 }
-object type::create(std::span<const value> args, const call_options& options) const {
+object type::create(const std::vector<value>& args, const call_options& options) const {
     const auto state = detail::runtime_state::require(target_);
     return state->runtime->perform(INTEROP_CONSTRUCT, state, {}, {args.begin(), args.end()}, options).as<object>();
 }
 value type::call(std::string_view name, std::initializer_list<value> args, const call_options& options) const {
-    return call(name, std::span<const value>(args.begin(), args.size()), options);
+    return call(name, std::vector<value>(args), options);
 }
-value type::call(std::string_view name, std::span<const value> args, const call_options& options) const {
+value type::call(std::string_view name, const std::vector<value>& args, const call_options& options) const {
     const auto state = detail::runtime_state::require(target_);
     return state->runtime->perform(INTEROP_CALL_STATIC, state, name, {args.begin(), args.end()}, options);
 }

@@ -1,3 +1,15 @@
+set(INTEROP_TARGET_FRAMEWORK "net48" CACHE STRING "Managed target: net48 (primary, Windows) or net8.0 and newer")
+if(INTEROP_TARGET_FRAMEWORK STREQUAL "net48")
+    if(NOT WIN32)
+        message(FATAL_ERROR "The default .NET Framework 4.8 host requires Windows. For modern .NET on this platform, select -DINTEROP_TARGET_FRAMEWORK=net10.0 (or another installed net8.0+ target).")
+    endif()
+    if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$" OR CMAKE_GENERATOR_PLATFORM MATCHES "^[Aa][Rr][Mm]")
+        message(FATAL_ERROR "The .NET Framework 4.8 host requires MSVC and a Windows x64 target (use -A x64).")
+    endif()
+elseif(NOT INTEROP_TARGET_FRAMEWORK MATCHES "^net([89]|[1-9][0-9]+)\\.0$")
+    message(FATAL_ERROR "Unsupported INTEROP_TARGET_FRAMEWORK: use net48 or net8.0 and newer.")
+endif()
+
 find_program(DOTNET_EXECUTABLE dotnet REQUIRED)
 execute_process(COMMAND "${DOTNET_EXECUTABLE}" --version
     OUTPUT_VARIABLE dotnet_version OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
@@ -5,7 +17,7 @@ string(REGEX MATCH "^[0-9]+" dotnet_major "${dotnet_version}")
 if(dotnet_major LESS 8)
     message(FATAL_ERROR "A .NET SDK 8 or newer is required")
 endif()
-set(INTEROP_TARGET_FRAMEWORK "net${dotnet_major}.0" CACHE STRING "Managed target framework (requires its targeting pack)")
+if(NOT INTEROP_TARGET_FRAMEWORK STREQUAL "net48")
 
 # An explicit pack path also supports nonstandard SDK installations and cross builds.
 set(DOTNET_HOST_PACK "" CACHE PATH "Directory containing nethost.h, hostfxr.h and static nethost")
@@ -54,6 +66,8 @@ endif()
 add_library(interop_nethost STATIC IMPORTED)
 set_target_properties(interop_nethost PROPERTIES IMPORTED_LOCATION "${nethost_static}"
     INTERFACE_INCLUDE_DIRECTORIES "${DOTNET_HOST_PACK}")
+
+endif() # modern .NET host pack
 
 function(interop_managed target project assembly)
     set(output "${CMAKE_CURRENT_BINARY_DIR}/managed/${target}")

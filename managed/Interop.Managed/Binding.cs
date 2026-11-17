@@ -60,8 +60,8 @@ internal static class Binding
     {
         Type[] left = a.GetParameters().Select(p => p.ParameterType).ToArray();
         Type[] right = b.GetParameters().Select(p => p.ParameterType).ToArray();
-        return left.Zip(right).All(pair => pair.Second.IsAssignableFrom(pair.First)) &&
-            left.Zip(right).Any(pair => pair.First != pair.Second);
+        return left.Zip(right, (l, r) => r.IsAssignableFrom(l)).All(match => match) &&
+            left.Zip(right, (l, r) => l != r).Any(different => different);
     }
 
     private static bool ConvertArgument(object? value, Type target, out object? converted, out int cost)

@@ -23,7 +23,7 @@ internal static class Handles
         lock (Gate)
         {
             Entry entry = Identities.GetValue(target, static key => new Entry(key));
-            ObjectDisposedException.ThrowIf(entry.Disposed, target);
+            if (entry.Disposed) throw new ObjectDisposedException(target.GetType().FullName);
             if (next == ulong.MaxValue) throw new OverflowException("Object lease space exhausted.");
             ulong token = ++next;
             Leases.Add(token, entry);
@@ -38,7 +38,7 @@ internal static class Handles
         lock (Gate)
         {
             Entry entry = Find(token);
-            ObjectDisposedException.ThrowIf(entry.Disposed, entry.Target);
+            if (entry.Disposed) throw new ObjectDisposedException(entry.Target.GetType().FullName);
             return entry.Target;
         }
     }
@@ -81,7 +81,7 @@ internal static class Handles
         lock (Gate)
         {
             Entry entry = Find(token);
-            ObjectDisposedException.ThrowIf(entry.Disposed, entry.Target);
+            if (entry.Disposed) throw new ObjectDisposedException(entry.Target.GetType().FullName);
             entry.Owned = true;
         }
     }
