@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
         auto stream = stream_type.create();
         stream.call("WriteByte", {std::uint8_t{42}});
         std::cout << "Stream length: " << stream.get("Length").as<std::int64_t>() << '\n';
-        // IDisposable.Dispose runs when the last C++ lease goes out of scope.
+        stream.dispose(); // GCHandle release alone does not call IDisposable.Dispose.
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

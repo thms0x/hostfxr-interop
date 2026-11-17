@@ -293,6 +293,9 @@ Add `unmanaged_to_managed/managed/Interop.Managed/Interop.Managed.csproj` to the
 existing solution and build it for `net48`. Build the target C# service assembly
 for Framework 4.8 too. Arrange deployment/build dependencies for these assemblies;
 the native `.vcxproj` does not need to reference them as C++/CLI metadata.
+Deploy the native library and managed bridge from the same revision. This direction
+uses ABI v2; an older v1 pair must fail the startup version check rather than run
+with the wrong disposal behavior.
 
 Put a plain C++ facade behind the application's existing native service interface.
 For an application-defined C# `Product.Managed.Counter` with a public
@@ -315,8 +318,9 @@ void exercise_managed_counter(const std::filesystem::path& deploymentDirectory) 
 Pass an absolute deployment directory derived from the application location, not
 the current working directory. Keep service objects alive for their intended
 application lifetime; the function above illustrates a short scoped call only.
-Constructed `IDisposable` objects are disposed after their final exported lease;
-factory-returned objects are borrowed unless ownership is explicitly adopted.
+Releasing the final C++ lease frees its GCHandle but does not call
+`IDisposable.Dispose`. Call `object::dispose()` explicitly for managed resources
+that need deterministic cleanup, including objects returned by factories.
 Review [ownership and overload selection](../unmanaged_to_managed/README.md).
 
 In a native EXE this bridge loads CLR v4 and bootstraps `Interop.Managed` in the

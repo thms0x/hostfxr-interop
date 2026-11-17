@@ -65,6 +65,7 @@ auto managedType = runtime.resolve_type("System.IO.MemoryStream");
 auto managedObject = managedType.create({std::int32_t{256}});
 managedObject.call("WriteByte", {std::uint8_t{42}});
 auto length = managedObject.get("Length").as<std::int64_t>(); // 1
+managedObject.dispose(); // Explicitly dispose IDisposable resources.
 ```
 
 See the [managed-object creation flow](unmanaged_to_managed/README.md#object-creation-flow)
@@ -108,7 +109,8 @@ flowchart LR
 
 Both directions use explicit numeric widths, UTF-8 strings, arrays, opaque object
 leases, and exception-to-result conversion at a C ABI boundary. They have separate
-ABIs and ownership mechanisms; object handles cannot be exchanged between them.
+ABIs and ownership mechanisms: C++ → C# uses ABI v2, while C# → C++ uses ABI v1.
+Object handles cannot be exchanged between them.
 C++ types in the reverse direction explicitly register their constructors and
 exposed members; C++17 supplies no runtime reflection for arbitrary classes.
 

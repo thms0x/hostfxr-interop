@@ -189,7 +189,7 @@ For C# → C++, introduce a registry from monotonically issued lease IDs to
 `std::shared_ptr<object>`. Lookup and release validate the ID; an old ID must
 never silently select a new object. For C++ → C#, this branch instead puts a
 normal `GCHandle` value in `scalar` for each exported lease. The handle roots a
-managed identity record, and a `ConditionalWeakTable` joins aliases for disposal.
+managed object directly. Separate exports of the same object get separate handles.
 The C++ RAII wrapper releases each GCHandle exactly once. GCHandle slots may be
 reused, so raw ABI callers must never use an expired or invented handle value.
 
@@ -213,7 +213,7 @@ after each test scope.
 
 **Reference:** [native registry](../managed_to_umanaged/src/interop.cpp),
 [SafeHandle and module ownership](../managed_to_umanaged/managed/Interop.Native/Module.cs),
-and [managed identity and disposal](../unmanaged_to_managed/managed/Interop.Managed/Handles.cs).
+and [managed GCHandle operations](../unmanaged_to_managed/managed/Interop.Managed/Handles.cs).
 
 ## 5. Let C# construct and call one registered C++ class
 
@@ -310,22 +310,25 @@ int main() {
     auto managedObject = managedType.create({std::int32_t{256}});
     managedObject.call("WriteByte", {std::uint8_t{42}});
     auto length = managedObject.get("Length").as<std::int64_t>();
+    managedObject.dispose();
     return length == 1 ? 0 : 1;
-} // The final object lease releases and disposes the owned MemoryStream.
+} // The final object lease frees its GCHandle.
 ```
 
 Creation follows `type::create` → `perform(INTEROP_CONSTRUCT)` → `Bridge.Invoke`
 → `Binding.Invoke` → `ConstructorInfo.Invoke` → export lease → C++ `object`.
 Subsequent calls carry that object's GCHandle lease value instead of the type's.
 
-Specify disposal separately from reachability. In this repository constructed
-objects are owned and final lease release disposes `IDisposable`; returned objects
-are borrowed unless their identity is already owned or ownership is explicitly
-taken. Explicit disposal reports errors, while destructor cleanup suppresses them.
+Specify disposal separately from reachability. The final C++ lease release frees
+its GCHandle but does not call `IDisposable.Dispose`. Call `object::dispose()`
+explicitly when the managed resource is no longer needed. A method returning the
+same object creates another independent handle; the bridge does not coordinate
+disposal across those handles.
 
 **Done when:** the example returns zero; a throwing constructor produces
-`managed_error`; wrong overloads fail; aliases keep objects alive; final release
-disposes exactly once. Account for type leases when comparing live-handle counts.
+`managed_error`; wrong overloads fail; aliases keep objects alive; explicit
+disposal runs when requested, while release only frees handles. Account for type
+leases when comparing live-handle counts.
 
 **Reference:** [dispatcher](../unmanaged_to_managed/managed/Interop.Managed/Bridge.cs),
 [reflection binder](../unmanaged_to_managed/managed/Interop.Managed/Binding.cs),
@@ -333,11 +336,11 @@ and [C++ public API](../unmanaged_to_managed/include/interop/interop.hpp).
 
 ## 8. Prove cleanup, threading, and deployment
 
-**Build:** turn the milestone checks into automated integration tests. Bridge
-locking protects lease bookkeeping, not mutable application objects. Keep a target
-alive throughout its call, then synchronize its state inside the adapter or domain
-class. Document any required UI thread or COM apartment; the bridge does not
-automatically dispatch calls to another thread.
+**Build:** turn the milestone checks into automated integration tests. Native
+registry locking protects lease bookkeeping, not mutable application objects.
+The C++ lease keeps its managed GCHandle alive during calls. Synchronize mutable
+state inside the adapter or domain class. Document any required UI thread or COM
+apartment; the bridge does not automatically dispatch calls to another thread.
 
 Use a small test matrix: successful and failing calls, malformed supported ABI
 inputs, aliases, failed result conversion, repeated disposal, concurrent calls and

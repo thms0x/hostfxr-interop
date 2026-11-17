@@ -39,8 +39,7 @@ namespace interop
     };
 
     // Copies share one lease; reset() releases this copy. Every lease roots its target.
-    // Constructed IDisposable objects are disposed after their final exported lease.
-    // Objects returned by methods/properties are borrowed, unless already owned.
+    // Release does not call IDisposable.Dispose; call dispose() explicitly when needed.
     class object
     {
     public:
@@ -59,10 +58,8 @@ namespace interop
                    const call_options &options = {}) const;
         value get(std::string_view name) const;
         void set(std::string_view name, value v) const;
-        // Explicit disposal is idempotent, affects all aliases, and reports exceptions.
+        // Calls IDisposable.Dispose if implemented; any exception is reported.
         void dispose() const;
-        // Opt a borrowed factory result into disposal after its final exported lease.
-        void take_ownership() const;
 
     private:
         explicit object(std::shared_ptr<object_lease> lease) : lease_(std::move(lease)) {}

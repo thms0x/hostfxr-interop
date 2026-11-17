@@ -75,15 +75,15 @@ internal static unsafe class Marshalling
     public static string[] Strings(in AbiValue value) => value.Kind == Kind.Null ? [] :
         ReadArray(value).Select(v => v as string ?? throw new ArgumentException("Expected type names.")).ToArray();
 
-    public static void Write(ref AbiValue destination, object? value, bool owned = false, int depth = 0)
+    public static void Write(ref AbiValue destination, object? value, bool forceObject = false, int depth = 0)
     {
         if (depth > MaxDepth) throw new ArgumentException("Value nesting exceeds 32 levels (possibly a cyclic array).");
         destination = default;
         // Constructors always return an object lease, including boxed structs,
         // strings, and arrays. Subsequent method results use value marshalling.
-        if (owned && value is not null)
+        if (forceObject && value is not null)
         {
-            destination.Scalar = Handles.Export(value, true);
+            destination.Scalar = Handles.Export(value);
             destination.Kind = Kind.Object;
             return;
         }
@@ -117,13 +117,13 @@ internal static unsafe class Marshalling
                 for (int i = 0; i < v.Length; i++) Write(ref values[i], v.GetValue(i), depth: depth + 1);
                 return;
             default:
-                destination.Scalar = Handles.Export(value, owned);
+                destination.Scalar = Handles.Export(value);
                 destination.Kind = Kind.Object;
                 return;
         }
     }
 
-    // Cleanup continues even if a user IDisposable throws.
+    // Free only unadopted result handles; explicit Dispose is a separate operation.
     public static void Free(ref AbiValue value)
     {
         if (value.Kind == Kind.Array)

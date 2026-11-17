@@ -15,7 +15,7 @@ extern "C"
 {
 #endif
 
-#define INTEROP_ABI_VERSION 1u
+#define INTEROP_ABI_VERSION 2u
 
     enum interop_kind
     {
@@ -49,8 +49,7 @@ extern "C"
         INTEROP_SET,
         INTEROP_RELEASE,
         INTEROP_DISPOSE,
-        INTEROP_LIVE_HANDLES,
-        INTEROP_TAKE_OWNERSHIP
+        INTEROP_LIVE_HANDLES
     };
 
     /* UTF-8 and array storage is borrowed in requests and owned in results.
@@ -58,7 +57,7 @@ extern "C"
        Object handles are valid only until their matching INTEROP_RELEASE call;
        callers must never replay a released handle or invent a handle value.
        data/length describe UTF-8 bytes or interop_value elements; no NUL terminator.
-       Reserved fields must be zero. ABI v1 supports 64-bit processes only. */
+       Reserved fields must be zero. ABI v2 supports 64-bit processes only. */
     typedef struct interop_value
     {
         int32_t kind;
@@ -109,7 +108,7 @@ extern "C"
 
 #ifdef __cplusplus
 }
-static_assert(sizeof(void *) == 8, "interop ABI v1 requires a 64-bit process");
+static_assert(sizeof(void *) == 8, "interop ABI v2 requires a 64-bit process");
 static_assert(sizeof(interop_value) == 32);
 static_assert(offsetof(interop_value, data) == 16);
 static_assert(sizeof(interop_request) == 184);

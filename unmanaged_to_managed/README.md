@@ -3,8 +3,8 @@
 The primary target is **C++17 and .NET Framework 4.8 on Windows x64**.
 Native C++ applications can construct managed objects, call methods, access
 properties, and receive managed exceptions through a stable C ABI. Exported object
-leases keep managed objects alive; constructed `IDisposable` objects are disposed
-when their final lease is released.
+leases keep managed objects alive until C++ releases them. Call `dispose()`
+explicitly for managed `IDisposable` resources.
 
 ## Architecture
 
@@ -63,7 +63,7 @@ its layouts.
 | [interop.cpp](src/interop.cpp) | CLR startup, ABI transport, wrapper methods, and lease release |
 | [abi.h](include/interop/abi.h) | C ABI layout and ownership rules |
 | [Bridge.cs](managed/Interop.Managed/Bridge.cs) | Managed request dispatch |
-| [Handles.cs](managed/Interop.Managed/Handles.cs) | GCHandle leases and disposal policy |
+| [Handles.cs](managed/Interop.Managed/Handles.cs) | Direct GCHandle allocation, lookup, release, and explicit disposal |
 
 ## Build for .NET Framework 4.8
 
@@ -121,7 +121,7 @@ auto text = builder.call("ToString").as<std::string>();
 Use unqualified core type names, such as `System.String`, across both runtimes.
 Explicit core assembly names differ: `mscorlib` on Framework and
 `System.Private.CoreLib` on modern .NET. The bridge and component assemblies must
-target the selected runtime. ABI v1 requires 64-bit processes; x86 is unsupported.
+target the selected runtime. ABI v2 requires 64-bit processes; x86 is unsupported.
 
 ### Creating a managed object
 
@@ -137,7 +137,8 @@ auto managedObject = managedType.create({std::int32_t{256}});
 managedObject.call("WriteByte", {std::uint8_t{42}});
 auto length = managedObject.get("Length").as<std::int64_t>(); // 1 byte
 
-// Releasing the final lease calls MemoryStream.Dispose().
+// Dispose the resource explicitly, then release this C++ handle.
+managedObject.dispose();
 managedObject.reset();
 ```
 
@@ -150,10 +151,11 @@ that class's constructor arguments.
 
 Creation follows `type::create` → `runtime_core::perform(INTEROP_CONSTRUCT)` →
 `Bridge.Invoke` / `Dispatch` → `Binding.Invoke` → `ConstructorInfo.Invoke`.
-`Marshalling.Write` exports the new instance through `Handles.Export` as an owned
-lease, and C++ `decode` adopts it into the returned `interop::object`. If the
+`Marshalling.Write` exports the new instance through `Handles.Export` as a
+GCHandle lease, and C++ `decode` adopts it into the returned `interop::object`. If the
 constructor throws, the caller receives a `managed_error`. Leaving the C++ scope
-also releases the lease, so an explicit `reset()` is optional.
+also releases the lease, so an explicit `reset()` is optional. Release does not call
+`IDisposable.Dispose`; call `managedObject.dispose()` when the resource is no longer needed.
 
 #### Object creation flow
 
@@ -177,20 +179,22 @@ sequenceDiagram
     Binding->>CLR: ConstructorInfo.Invoke(256)
     CLR-->>Binding: New MemoryStream
     Binding-->>Bridge: Managed object
-    Bridge->>Handles: Export(object, owned=true)
-    Handles->>Handles: Find identity and allocate GCHandle lease
+    Bridge->>Handles: Export(object)
+    Handles->>Handles: Allocate GCHandle for object
     Handles-->>Bridge: Object handle in result.Value
     Bridge-->>Native: Status 0 and object result
     Native->>Native: Decode into object_lease and clear result.Value scalar
     Native->>Bridge: free_result (adopted handle preserved)
     Native-->>App: interop::object managedObject
+    opt Explicit managedObject.dispose()
+        App->>Native: dispose()
+        Native->>Bridge: invoke(INTEROP_DISPOSE, object handle)
+        Bridge->>Handles: Call IDisposable.Dispose()
+    end
     opt reset() or final C++ copy leaves scope
         App->>Native: Destroy object_lease
         Native->>Bridge: invoke(INTEROP_RELEASE, object handle)
         Bridge->>Handles: Free GCHandle lease
-        opt Final lease of owned IDisposable
-            Handles->>CLR: Dispose()
-        end
     end
 ```
 
@@ -299,12 +303,11 @@ The other public calls share the same request path, with different operation cod
 | C++ call | ABI operation | Managed handler |
 | --- | --- | --- |
 | `runtime.resolve_type(name)` / `load_type(path, name)` | `INTEROP_LOAD_TYPE` | `Components.LoadType` / `Resolve`; returns a lease for a `System.Type` |
-| `type.create(args)` | `INTEROP_CONSTRUCT` | `Binding.Invoke` → `ConstructorInfo.Invoke`; returns an owned object lease |
+| `type.create(args)` | `INTEROP_CONSTRUCT` | `Binding.Invoke` → `ConstructorInfo.Invoke`; returns an object lease |
 | `type.call(name, args)` | `INTEROP_CALL_STATIC` | `Binding.Invoke` → static `MethodInfo.Invoke` |
 | `object.call(name, args)` | `INTEROP_CALL` | `Binding.Invoke` → instance `MethodInfo.Invoke` |
 | `type.get/set` / `object.get/set` | `INTEROP_GET_STATIC/SET_STATIC` / `INTEROP_GET/SET` | `Binding.Member` → public property or field access |
 | `object.dispose()` | `INTEROP_DISPOSE` | `Handles.Dispose` |
-| `object.take_ownership()` | `INTEROP_TAKE_OWNERSHIP` | `Handles.TakeOwnership` |
 | Final C++ copy of a lease is released | `INTEROP_RELEASE` | `Handles.Release` |
 
 For example, `resolve_type("System.Text.StringBuilder")` first obtains a type
@@ -319,10 +322,9 @@ the statement. `ToString` returns a copied string instead.
 Copying an `interop::object` shares its existing C++ lease. Its declared destructor
 is implemented in `interop.cpp`; the final copy destroys `object_lease`, which calls
 `runtime_core::release` and sends `INTEROP_RELEASE` to `Handles.Release`. Each
-exported lease is a normal GCHandle to a managed identity record; it keeps the
-object alive without pinning
-its address. A `ConditionalWeakTable` joins separate leases for the same object,
-so releasing the final lease of an owned object calls `IDisposable.Dispose` once.
+exported lease is a normal GCHandle directly to the managed object. It keeps the
+object alive without pinning its address. Separate exports of the same object get
+separate handles, which are released independently.
 
 The C++ RAII wrapper must be the only owner of each handle value. GCHandle slots
 can be reused after `Free`, so the ABI cannot safely validate a stale or invented
@@ -330,9 +332,9 @@ value. Do not retain raw handles beyond the wrapper lifetime or call `RELEASE`
 twice. The registry-based baseline branch provides checked, never-reused IDs if
 untrusted or manually managed ABI callers need stale-handle rejection.
 
-Objects created through `type.create` are owned. Objects returned by methods or
-properties are borrowed unless that identity is already owned; `take_ownership()`
-opts a borrowed object into automatic disposal. Explicit `dispose()` affects all
-aliases and reports managed errors. Automatic cleanup suppresses disposal errors
-so C++ destructors remain nonthrowing. Releasing wrappers leaves the CLR running
-for the lifetime of the process.
+`reset()` and C++ destruction only free the GCHandle. Call `dispose()` explicitly
+for `IDisposable` resources; it invokes the managed method and reports errors.
+The bridge does not track disposal across separately exported handles of the same
+object. As with ordinary C# references, other wrappers may still refer to an
+object after one wrapper calls `dispose()`. Releasing wrappers leaves the CLR
+running for the lifetime of the process.

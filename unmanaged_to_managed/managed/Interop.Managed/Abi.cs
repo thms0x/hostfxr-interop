@@ -7,7 +7,7 @@ internal enum Kind : int { Null, Bool, I32, I64, U32, U64, F32, F64, Utf8, Objec
 internal enum Operation : int
 {
     LoadType = 1, Construct, CallStatic, Call, GetStatic, SetStatic, Get, Set,
-    Release, Dispose, LiveHandles, TakeOwnership
+    Release, Dispose, LiveHandles
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -76,10 +76,10 @@ public static unsafe class EntryPoint
 #endif
     public static int GetApi(uint version, uint size, void* output)
     {
-        if (version != 1 || size != sizeof(Api) || output == null || IntPtr.Size != 8 ||
+        if (version != 2 || size != sizeof(Api) || output == null || IntPtr.Size != 8 ||
             sizeof(AbiValue) != 32 || sizeof(Request) != 184 || sizeof(Result) != 128)
             return 1;
-        *(Api*)output = new Api { Size = (uint)sizeof(Api), Version = 1,
+        *(Api*)output = new Api { Size = (uint)sizeof(Api), Version = 2,
 #if NETFRAMEWORK
             Invoke = Marshal.GetFunctionPointerForDelegate(InvokeRoot),
             FreeResult = Marshal.GetFunctionPointerForDelegate(FreeResultRoot) };

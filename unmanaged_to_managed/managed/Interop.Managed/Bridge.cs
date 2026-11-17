@@ -15,7 +15,7 @@ internal static unsafe class Bridge
         *result = default;
         try
         {
-            if (request == null || request->Size != sizeof(Request) || request->Version != 1 || request->Reserved != 0)
+            if (request == null || request->Size != sizeof(Request) || request->Version != 2 || request->Reserved != 0)
                 throw new ArgumentException("Invalid ABI request size, version, or reserved field.");
             object? value = Dispatch(*request);
             Marshalling.Write(ref result->Value, value, request->Operation == Operation.Construct);
@@ -45,7 +45,6 @@ internal static unsafe class Bridge
             case Operation.Release: Handles.Release(request.Target); return null;
             case Operation.Dispose: Handles.Dispose(request.Target); return null;
             case Operation.LiveHandles: return Handles.Count;
-            case Operation.TakeOwnership: Handles.TakeOwnership(request.Target); return null;
             case Operation.LoadType:
                 return Components.LoadType(request.Assembly.Kind == Kind.Null ? null : Marshalling.Text(request.Assembly),
                     Marshalling.Text(request.Name));

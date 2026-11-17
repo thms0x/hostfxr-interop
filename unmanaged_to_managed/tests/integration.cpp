@@ -65,13 +65,25 @@ int main(int argc, char** argv) {
             auto alias = object.call("Self", std::vector<interop::value>{}).as<interop::object>();
             probe.call("Collect", std::vector<interop::value>{});
             object.reset();
-            check(probe.get("Disposals").as<std::int32_t>() == 0, "alias keeps object alive");
+            check(probe.get("Disposals").as<std::int32_t>() == 0, "release does not dispose");
             check(alias.get("Text").as<std::string>() == text, "callback and lease survive GC");
+            alias.dispose();
+            check(probe.get("Disposals").as<std::int32_t>() == 1, "explicit disposal");
             alias.reset();
-            check(probe.get("Disposals").as<std::int32_t>() == 1, "final lease disposes exactly once");
+            check(probe.get("Disposals").as<std::int32_t>() == 1, "release does not dispose again");
+            auto undisposed = probe.create();
+            undisposed.reset();
+            check(probe.get("Disposals").as<std::int32_t>() == 1, "final release only frees GCHandle");
         }
         check(runtime.live_handles() == baseline, "all handles released");
         auto api = runtime.native_api();
+        interop_request old_version{};
+        old_version.size = sizeof(old_version);
+        old_version.version = INTEROP_ABI_VERSION - 1;
+        old_version.operation = INTEROP_LIVE_HANDLES;
+        interop_result old_result{};
+        check(api.invoke(&old_version, &old_result) != 0, "previous ABI version rejected");
+        api.free_result(&old_result);
         interop_request invalid{};
         interop_result result{};
         check(api.invoke(&invalid, &result) != 0, "invalid ABI request rejected");

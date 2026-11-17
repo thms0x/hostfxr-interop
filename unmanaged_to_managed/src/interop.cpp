@@ -491,11 +491,6 @@ namespace interop
         const auto lease = runtime_core::require(*this);
         lease->core->perform(INTEROP_DISPOSE, lease);
     }
-    void object::take_ownership() const
-    {
-        const auto lease = runtime_core::require(*this);
-        lease->core->perform(INTEROP_TAKE_OWNERSHIP, lease);
-    }
     object type::create(std::initializer_list<value> args, const call_options &options) const
     {
         return create(std::vector<value>(args), options);
