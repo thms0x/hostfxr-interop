@@ -10,8 +10,7 @@ with optional modern .NET 8+ support.
 
 The folder name `managed_to_umanaged/` is retained as requested. Each folder has
 its own CMake project, public interface, examples, tests, and architecture and
-flow diagrams. The original implementation and its documentation are in
-`unmanaged_to_managed/`.
+flow diagrams.
 
 ```text
 unmanaged_to_managed/
