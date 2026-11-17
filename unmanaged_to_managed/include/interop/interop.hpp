@@ -48,6 +48,12 @@ namespace interop
     {
     public:
         object() = default;
+        object(const object &) = default;
+        object(object &&) noexcept = default;
+        object &operator=(const object &) = default;
+        object &operator=(object &&) noexcept = default;
+        // The final C++ owner releases the managed GCHandle through the bridge.
+        ~object();
         explicit operator bool() const noexcept { return bool(state_); }
         void reset() noexcept { state_.reset(); }
         value call(std::string_view name, std::initializer_list<value> args = {},

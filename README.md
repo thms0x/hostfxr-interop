@@ -16,7 +16,10 @@ flow diagrams. The original implementation and its documentation are in
 ```text
 unmanaged_to_managed/
   include/interop/          C++ caller API and C ABI
-  src/                     CLR hosting and request handling
+  src/hosting.cpp          CLR startup (Framework or hostfxr)
+  src/bridge.cpp           ABI values, calls, and results
+  src/object.cpp           C++ wrappers and RAII release
+  src/detail/              Private bridge state shared by those files
   managed/Interop.Managed/ Managed reflection bridge
   examples/                C++ application
   tests/                   Native integration tests and managed fixture

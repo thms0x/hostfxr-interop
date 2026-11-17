@@ -50,9 +50,20 @@ flowchart TB
 Hosting establishes the function pointers during `runtime` construction.
 Subsequent calls use those pointers directly. `Components` finds managed types,
 `Binding` uses reflection to select and invoke their members, and `Handles` keeps
-exported objects alive while C++ holds leases. Source entry points are
-[the C++ API](include/interop/interop.hpp), [the native implementation](src/interop.cpp),
-[the ABI contract](include/interop/abi.h), and [the managed bridge](managed/Interop.Managed/Bridge.cs).
+exported objects alive while C++ holds leases.
+
+The native implementation has one file per responsibility:
+
+| File | Start here for |
+| --- | --- |
+| [interop.hpp](include/interop/interop.hpp) | Public C++ `runtime`, `type`, and `object` wrappers |
+| [object.cpp](src/object.cpp) | Wrapper calls, `object::~object`, and the final lease release |
+| [bridge.cpp](src/bridge.cpp) | Encoding arguments, calling the ABI, and decoding results |
+| [hosting.cpp](src/hosting.cpp) | CLR v4 or hostfxr startup and API bootstrap |
+| [bridge_state.hpp](src/detail/bridge_state.hpp) | Private state shared by those three source files |
+| [abi.h](include/interop/abi.h) | C ABI layout and ownership rules |
+| [Bridge.cs](managed/Interop.Managed/Bridge.cs) | Managed request dispatch |
+| [Handles.cs](managed/Interop.Managed/Handles.cs) | GCHandle leases and disposal policy |
 
 ## Build for .NET Framework 4.8
 
@@ -305,10 +316,11 @@ the statement. `ToString` returns a copied string instead.
 
 ### Object lifetime and cleanup
 
-Copying an `interop::object` shares its existing C++ lease. When the last copy is
-reset or destroyed, `object_state::~object_state` calls `runtime_state::release`,
-which sends `INTEROP_RELEASE` to `Handles.Release`. Each exported lease is a normal
-GCHandle to a managed identity record; it keeps the object alive without pinning
+Copying an `interop::object` shares its existing C++ lease. Its declared destructor
+is implemented in `object.cpp`; the final copy destroys `object_state`, which calls
+`runtime_state::release` and sends `INTEROP_RELEASE` to `Handles.Release`. Each
+exported lease is a normal GCHandle to a managed identity record; it keeps the
+object alive without pinning
 its address. A `ConditionalWeakTable` joins separate leases for the same object,
 so releasing the final lease of an owned object calls `IDisposable.Dispose` once.
 

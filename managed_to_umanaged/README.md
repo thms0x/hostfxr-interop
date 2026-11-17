@@ -50,6 +50,17 @@ wraps C++ classes in adapters with explicitly exposed members. The
 instance and static methods, and property access. C++ exceptions become
 `NativeException` instances with a `NativeType` and message.
 
+Source map for this direction:
+
+| File | Start here for |
+| --- | --- |
+| [NativeRuntime.cs](managed/Interop.Native/NativeRuntime.cs) | Public C# `NativeRuntime`, `NativeType`, and `NativeObject` wrappers |
+| [Module.cs](managed/Interop.Native/Module.cs) | Native DLL loading, API delegates, and `SafeHandle` lifetime |
+| [Marshalling.cs](managed/Interop.Native/Marshalling.cs) | Request and result value conversion |
+| [interop.hpp](include/native_interop/interop.hpp) | C++ adapter and type registration API |
+| [interop.cpp](src/interop.cpp) | Native dispatch, registry, and result cleanup |
+| [abi.h](include/native_interop/abi.h) | C ABI layout and ownership rules |
+
 ## Build and run
 
 Run these commands from `managed_to_umanaged/`. Use Visual Studio 2022 C++ desktop
