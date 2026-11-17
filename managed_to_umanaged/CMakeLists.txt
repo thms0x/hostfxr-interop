@@ -1,0 +1,81 @@
+cmake_minimum_required(VERSION 3.22)
+project(managed_to_unmanaged VERSION 0.1.0 LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+include(CTest)
+find_package(Threads REQUIRED)
+
+set(INTEROP_TARGET_FRAMEWORK "net48" CACHE STRING "Managed target: net48 or net8.0 and newer")
+if(INTEROP_TARGET_FRAMEWORK STREQUAL "net48")
+    if(NOT WIN32)
+        message(FATAL_ERROR "The net48 loader requires Windows. Select -DINTEROP_TARGET_FRAMEWORK=net8.0 (or a newer installed target) on other platforms.")
+    endif()
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$" OR CMAKE_GENERATOR_PLATFORM MATCHES "^[Aa][Rr][Mm]")
+        message(FATAL_ERROR "The .NET Framework 4.8 target requires Windows x64 (use -A x64).")
+    endif()
+elseif(NOT INTEROP_TARGET_FRAMEWORK MATCHES "^net([89]|[1-9][0-9]+)\\.0$")
+    message(FATAL_ERROR "Unsupported target: use net48 or net8.0 and newer.")
+endif()
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "Native interop requires a 64-bit target.")
+endif()
+find_program(DOTNET_EXECUTABLE dotnet REQUIRED)
+execute_process(COMMAND "${DOTNET_EXECUTABLE}" --version OUTPUT_VARIABLE sdk_version
+    OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+if(sdk_version VERSION_LESS 8.0)
+    message(FATAL_ERROR "A .NET SDK 8 or newer is required to build the managed library.")
+endif()
+
+add_library(native_interop STATIC src/interop.cpp)
+add_library(native_interop::native_interop ALIAS native_interop)
+set_target_properties(native_interop PROPERTIES POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+target_compile_features(native_interop PUBLIC cxx_std_17)
+target_include_directories(native_interop PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(native_interop PRIVATE Threads::Threads)
+if(MSVC)
+    target_compile_options(native_interop PRIVATE /W4 /permissive- /utf-8)
+else()
+    target_compile_options(native_interop PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_library(native_sample SHARED examples/native.cpp)
+target_link_libraries(native_sample PRIVATE native_interop::native_interop)
+set_target_properties(native_sample PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+
+# Each build target has isolated intermediates; its project references are built
+# together to avoid concurrent dotnet builds writing to the same obj directory.
+file(GLOB native_managed_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/managed/Interop.Native/*.cs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/managed/Interop.Native/*.csproj")
+function(native_managed target project assembly executable)
+    set(output "${CMAKE_CURRENT_BINARY_DIR}/managed/${target}")
+    set(extension dll)
+    if(executable AND INTEROP_TARGET_FRAMEWORK STREQUAL "net48")
+        set(extension exe)
+    endif()
+    file(GLOB sources CONFIGURE_DEPENDS "${project}/*.cs" "${project}/*.csproj")
+    add_custom_command(OUTPUT "${output}/${assembly}.${extension}"
+        COMMAND "${DOTNET_EXECUTABLE}" build "${project}/${assembly}.csproj"
+            --configuration Release --output "${output}"
+            --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/dotnet/${target}"
+            "-p:InteropTargetFramework=${INTEROP_TARGET_FRAMEWORK}"
+            -p:NuGetAudit=false -p:RestoreIgnoreFailedSources=true --nologo
+        DEPENDS ${sources} ${native_managed_sources} VERBATIM)
+    add_custom_target(${target} ALL DEPENDS "${output}/${assembly}.${extension}")
+    set(${target}_FILE "${output}/${assembly}.${extension}" PARENT_SCOPE)
+endfunction()
+native_managed(native_managed_library "${CMAKE_CURRENT_SOURCE_DIR}/managed/Interop.Native" Interop.Native FALSE)
+native_managed(native_managed_example "${CMAKE_CURRENT_SOURCE_DIR}/examples/managed" Interop.Native.Example TRUE)
+
+if(BUILD_TESTING)
+    native_managed(native_managed_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests" Interop.Native.Tests TRUE)
+    set(managed_runner "${DOTNET_EXECUTABLE}")
+    if(INTEROP_TARGET_FRAMEWORK STREQUAL "net48")
+        set(managed_runner "")
+    endif()
+    add_test(NAME native.integration COMMAND ${managed_runner} "${native_managed_tests_FILE}" "$<TARGET_FILE:native_sample>")
+    add_test(NAME native.example COMMAND ${managed_runner} "${native_managed_example_FILE}" "$<TARGET_FILE:native_sample>")
+    add_executable(native_abi_tests tests/abi.cpp)
+    target_link_libraries(native_abi_tests PRIVATE native_interop::native_interop)
+    add_test(NAME native.abi COMMAND native_abi_tests)
+endif()
