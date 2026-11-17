@@ -18,7 +18,7 @@ flowchart TB
     subgraph Native["Native code - C++17"]
         App["Application"]
         API["Public API: runtime, type, object, value"]
-        State["runtime_state: encode, perform, decode"]
+        State["runtime_core: encode, perform, decode"]
         Host["bootstrap: Windows CLR host by default<br/>Optional hostfxr for modern .NET"]
         App --> API
         API --> State
@@ -52,15 +52,15 @@ Subsequent calls use those pointers directly. `Components` finds managed types,
 `Binding` uses reflection to select and invoke their members, and `Handles` keeps
 exported objects alive while C++ holds leases.
 
-The native implementation has one file per responsibility:
+The C++ implementation has one public header and one source file. Start at
+`interop::object` in the header, then follow `object_lease` and `runtime_core` in
+the source. The C ABI is declared separately because the managed bridge also uses
+its layouts.
 
 | File | Start here for |
 | --- | --- |
 | [interop.hpp](include/interop/interop.hpp) | Public C++ `runtime`, `type`, and `object` wrappers |
-| [object.cpp](src/object.cpp) | Wrapper calls, `object::~object`, and the final lease release |
-| [bridge.cpp](src/bridge.cpp) | Encoding arguments, calling the ABI, and decoding results |
-| [hosting.cpp](src/hosting.cpp) | CLR v4 or hostfxr startup and API bootstrap |
-| [bridge_state.hpp](src/detail/bridge_state.hpp) | Private state shared by those three source files |
+| [interop.cpp](src/interop.cpp) | CLR startup, ABI transport, wrapper methods, and lease release |
 | [abi.h](include/interop/abi.h) | C ABI layout and ownership rules |
 | [Bridge.cs](managed/Interop.Managed/Bridge.cs) | Managed request dispatch |
 | [Handles.cs](managed/Interop.Managed/Handles.cs) | GCHandle leases and disposal policy |
@@ -148,7 +148,7 @@ For a type in your own assembly, obtain `managedType` with
 `runtime.load_type("MyLibrary.dll", "MyLibrary.MyClass")`, then call `create` with
 that class's constructor arguments.
 
-Creation follows `type::create` → `runtime_state::perform(INTEROP_CONSTRUCT)` →
+Creation follows `type::create` → `runtime_core::perform(INTEROP_CONSTRUCT)` →
 `Bridge.Invoke` / `Dispatch` → `Binding.Invoke` → `ConstructorInfo.Invoke`.
 `Marshalling.Write` exports the new instance through `Handles.Export` as an owned
 lease, and C++ `decode` adopts it into the returned `interop::object`. If the
@@ -163,7 +163,7 @@ The returned object gets a separate GCHandle lease, which the C++ wrapper owns.
 ```mermaid
 sequenceDiagram
     participant App as C++ application
-    participant Native as type / runtime_state
+    participant Native as type / runtime_core
     participant Bridge as Managed Bridge
     participant Handles as Managed Handles
     participant Binding as Reflection binder
@@ -181,11 +181,11 @@ sequenceDiagram
     Handles->>Handles: Find identity and allocate GCHandle lease
     Handles-->>Bridge: Object handle in result.Value
     Bridge-->>Native: Status 0 and object result
-    Native->>Native: Decode into object_state and clear result.Value scalar
+    Native->>Native: Decode into object_lease and clear result.Value scalar
     Native->>Bridge: free_result (adopted handle preserved)
     Native-->>App: interop::object managedObject
     opt reset() or final C++ copy leaves scope
-        App->>Native: Destroy object_state
+        App->>Native: Destroy object_lease
         Native->>Bridge: invoke(INTEROP_RELEASE, object handle)
         Bridge->>Handles: Free GCHandle lease
         opt Final lease of owned IDisposable
@@ -244,7 +244,7 @@ result cleanup finish.
 ```mermaid
 sequenceDiagram
     participant App as C++ application
-    participant Native as object / runtime_state
+    participant Native as object / runtime_core
     participant Bridge as Managed Bridge
     participant Handles as Managed Handles
     participant Binding as Managed Binding
@@ -278,7 +278,7 @@ sequenceDiagram
 ```
 
 1. `object::call` passes the object's GCHandle lease value, member name, and arguments to
-   `runtime_state::perform`. `encode` represents values using the tags and layouts
+   `runtime_core::perform`. `encode` represents values using the tags and layouts
    in `abi.h`; request strings are UTF-8 and request buffers remain valid for the call.
 2. `Bridge.Invoke` validates the request. `Dispatch` resolves the lease through
    `Handles.Get`, decodes the arguments, and chooses the operation handler.
@@ -317,8 +317,8 @@ the statement. `ToString` returns a copied string instead.
 ### Object lifetime and cleanup
 
 Copying an `interop::object` shares its existing C++ lease. Its declared destructor
-is implemented in `object.cpp`; the final copy destroys `object_state`, which calls
-`runtime_state::release` and sends `INTEROP_RELEASE` to `Handles.Release`. Each
+is implemented in `interop.cpp`; the final copy destroys `object_lease`, which calls
+`runtime_core::release` and sends `INTEROP_RELEASE` to `Handles.Release`. Each
 exported lease is a normal GCHandle to a managed identity record; it keeps the
 object alive without pinning
 its address. A `ConditionalWeakTable` joins separate leases for the same object,

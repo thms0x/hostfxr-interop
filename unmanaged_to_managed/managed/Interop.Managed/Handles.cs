@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace Interop.Managed;
 
 // Each exported lease is a normal (non-pinned) GCHandle to an identity record.
-// C++ owns the lease through object_state and releases it with RAII. The identity
+// C++ owns the lease through object_lease and releases it with RAII. The identity
 // record lets aliases share the same disposal policy even though they have
 // different GCHandles.
 internal static class Handles
@@ -35,7 +35,7 @@ internal static class Handles
     }
 
     // The ABI accepts handles only from this bridge and only while their C++
-    // object_state is alive. GCHandle cannot validate an arbitrary or stale token.
+    // object_lease is alive. GCHandle cannot validate an arbitrary or stale token.
     private static (GCHandle Handle, Entry Entry) Find(ulong token)
     {
         if (token == 0) throw new ArgumentException("Null object handle.");

@@ -283,7 +283,7 @@ Force managed GC between calls and repeat successfully. Missing assembly, bad
 entry-point name, and incompatible ABI each produce a useful startup error. Keep
 the CLR loaded for process lifetime; runtime-wrapper destruction must not stop it.
 
-**Reference:** [native bootstrap](../unmanaged_to_managed/src/hosting.cpp) and
+**Reference:** [native bootstrap](../unmanaged_to_managed/src/interop.cpp) and
 [Framework initializer and rooted delegates](../unmanaged_to_managed/managed/Interop.Managed/Abi.cs).
 
 ## 7. Let C++ construct and call a managed object

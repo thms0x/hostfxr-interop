@@ -15,11 +15,8 @@
 
 namespace interop
 {
-    namespace detail
-    {
-        struct runtime_state;
-        struct object_state;
-    }
+    class runtime_core;
+    class object_lease;
     class value;
     class type;
 
@@ -54,8 +51,8 @@ namespace interop
         object &operator=(object &&) noexcept = default;
         // The final C++ owner releases the managed GCHandle through the bridge.
         ~object();
-        explicit operator bool() const noexcept { return bool(state_); }
-        void reset() noexcept { state_.reset(); }
+        explicit operator bool() const noexcept { return bool(lease_); }
+        void reset() noexcept { lease_.reset(); }
         value call(std::string_view name, std::initializer_list<value> args = {},
                    const call_options &options = {}) const;
         value call(std::string_view name, const std::vector<value> &args,
@@ -68,9 +65,9 @@ namespace interop
         void take_ownership() const;
 
     private:
-        explicit object(std::shared_ptr<detail::object_state> state) : state_(std::move(state)) {}
-        std::shared_ptr<detail::object_state> state_;
-        friend struct detail::runtime_state;
+        explicit object(std::shared_ptr<object_lease> lease) : lease_(std::move(lease)) {}
+        std::shared_ptr<object_lease> lease_;
+        friend class runtime_core;
         friend class type;
     };
 
@@ -142,6 +139,6 @@ namespace interop
         interop_api native_api() const noexcept;
 
     private:
-        std::shared_ptr<detail::runtime_state> state_;
+        std::shared_ptr<runtime_core> core_;
     };
 } // namespace interop
