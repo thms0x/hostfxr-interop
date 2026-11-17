@@ -143,7 +143,11 @@ and types before accessing them. C++17 has no automatic reflection: overload
 selection, conversions, and member names are defined by the adapter. This API
 does not discover arbitrary symbols or class layouts in an existing DLL.
 
-## Creation and call flow
+## Object creation flow
+
+`nativeType.Create(10)` creates a `counter` through its registered factory. The
+native registry owns the resulting object lease; `NativeObject` owns the lease ID
+through a `SafeHandle`.
 
 ```mermaid
 sequenceDiagram
@@ -168,6 +172,14 @@ sequenceDiagram
     Managed->>Managed: Adopt lease into NativeObject SafeHandle
     Managed->>Plugin: free_result (adopted lease preserved)
     Managed-->>App: NativeObject
+    opt using scope ends or nativeObject.Dispose()
+        App->>Managed: Dispose NativeObject
+        Managed->>Plugin: NI_RELEASE(lease ID)
+        Plugin->>Registry: Erase lease and drop shared_ptr
+        opt No other leases retain the object
+            Registry->>Registry: Destroy C++ counter
+        end
+    end
 ```
 
 On Framework, the loader uses `LoadLibraryW` and `GetProcAddress`. With modern
@@ -175,6 +187,8 @@ On Framework, the loader uses `LoadLibraryW` and `GetProcAddress`. With modern
 validates the API version and layout before converting the returned function
 pointers into delegates with an explicit C calling convention. See the
 [delegate marshalling API](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.marshal.getdelegateforfunctionpointer).
+
+## Function call flow
 
 ```mermaid
 sequenceDiagram

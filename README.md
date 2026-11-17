@@ -68,6 +68,9 @@ managedObject.call("WriteByte", {std::uint8_t{42}});
 auto length = managedObject.get("Length").as<std::int64_t>(); // 1
 ```
 
+See the [managed-object creation flow](unmanaged_to_managed/README.md#object-creation-flow)
+for the constructor call, GCHandle lease handoff, and C++ RAII release.
+
 ## Create a native object from C#
 
 ```csharp
@@ -81,9 +84,32 @@ nativeObject.Set("Value", 42);
 int current = nativeObject.Get<int>("Value"); // 42
 ```
 
+See the [native-object creation flow](managed_to_umanaged/README.md#object-creation-flow)
+for factory registration, lease adoption, and `SafeHandle` cleanup.
+
+## Object creation flows
+
+```mermaid
+flowchart LR
+    subgraph Forward["C++ creates a C# object"]
+        F1["managedType.create(args)"] --> F2["INTEROP_CONSTRUCT"]
+        F2 --> F3["ConstructorInfo.Invoke"]
+        F3 --> F4["GCHandle lease"]
+        F4 --> F5["interop::object"]
+        F5 --> F6["C++ RAII releases lease"]
+    end
+    subgraph Reverse["C# creates a C++ object"]
+        R1["nativeType.Create(args)"] --> R2["NI_CONSTRUCT"]
+        R2 --> R3["Registered C++ factory"]
+        R3 --> R4["shared_ptr lease ID"]
+        R4 --> R5["NativeObject SafeHandle"]
+        R5 --> R6["Dispose releases lease"]
+    end
+```
+
 Both directions use explicit numeric widths, UTF-8 strings, arrays, opaque object
 leases, and exception-to-result conversion at a C ABI boundary. They have separate
-ABIs and ownership registries; object handles cannot be exchanged between them.
+ABIs and ownership mechanisms; object handles cannot be exchanged between them.
 C++ types in the reverse direction explicitly register their constructors and
 exposed members; C++17 supplies no runtime reflection for arbitrary classes.
 

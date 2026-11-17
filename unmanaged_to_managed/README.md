@@ -144,6 +144,45 @@ lease, and C++ `decode` adopts it into the returned `interop::object`. If the
 constructor throws, the caller receives a `managed_error`. Leaving the C++ scope
 also releases the lease, so an explicit `reset()` is optional.
 
+#### Object creation flow
+
+The type lease obtained by `resolve_type` identifies `System.IO.MemoryStream`.
+The returned object gets a separate GCHandle lease, which the C++ wrapper owns.
+
+```mermaid
+sequenceDiagram
+    participant App as C++ application
+    participant Native as type / runtime_state
+    participant Bridge as Managed Bridge
+    participant Handles as Managed Handles
+    participant Binding as Reflection binder
+    participant CLR as MemoryStream constructor
+    App->>Native: managedType.create(256)
+    Native->>Native: Encode Int32 argument and type lease
+    Native->>Bridge: invoke(INTEROP_CONSTRUCT, type lease, arguments)
+    Bridge->>Handles: Get(type lease)
+    Handles-->>Bridge: System.Type
+    Bridge->>Binding: Invoke constructor for MemoryStream(Int32)
+    Binding->>CLR: ConstructorInfo.Invoke(256)
+    CLR-->>Binding: New MemoryStream
+    Binding-->>Bridge: Managed object
+    Bridge->>Handles: Export(object, owned=true)
+    Handles->>Handles: Find identity and allocate GCHandle lease
+    Handles-->>Bridge: Object handle in result.Value
+    Bridge-->>Native: Status 0 and object result
+    Native->>Native: Decode into object_state and clear result.Value scalar
+    Native->>Bridge: free_result (adopted handle preserved)
+    Native-->>App: interop::object managedObject
+    opt reset() or final C++ copy leaves scope
+        App->>Native: Destroy object_state
+        Native->>Bridge: invoke(INTEROP_RELEASE, object handle)
+        Bridge->>Handles: Free GCHandle lease
+        opt Final lease of owned IDisposable
+            Handles->>CLR: Dispose()
+        end
+    end
+```
+
 ## Runtime startup flow
 
 For the default `net48` build, constructing `interop::runtime` performs this
