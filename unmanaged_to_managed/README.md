@@ -227,7 +227,7 @@ sequenceDiagram
     Native-->>App: Return interop::value or propagate managed_error
 ```
 
-1. `object::call` passes the object's lease ID, member name, and arguments to
+1. `object::call` passes the object's GCHandle lease value, member name, and arguments to
    `runtime_state::perform`. `encode` represents values using the tags and layouts
    in `abi.h`; request strings are UTF-8 and request buffers remain valid for the call.
 2. `Bridge.Invoke` validates the request. `Dispatch` resolves the lease through
@@ -237,7 +237,7 @@ sequenceDiagram
    `generic_types` supplies generic method type arguments. Numeric widths must match.
 4. `Marshalling.Write` encodes the managed return value. Strings become UTF-8
    buffers, supported arrays become arrays of ABI values, and other objects become
-   lease IDs. `decode` copies values into C++ storage and adopts returned object
+   GCHandle lease values. `decode` copies values into C++ storage and adopts returned object
    leases into `interop::object` wrappers.
 5. The C++ result guard always calls `free_result`, including during exception
    unwinding. Managed exceptions become status codes and diagnostic fields at the
@@ -268,9 +268,16 @@ the statement. `ToString` returns a copied string instead.
 
 Copying an `interop::object` shares its existing C++ lease. When the last copy is
 reset or destroyed, `object_state::~object_state` calls `runtime_state::release`,
-which sends `INTEROP_RELEASE` to `Handles.Release`. Separate leases for the same
-managed object share identity tracking. After the final exported lease of an owned
-object is released, its `IDisposable.Dispose` is called once.
+which sends `INTEROP_RELEASE` to `Handles.Release`. Each exported lease is a normal
+GCHandle to a managed identity record; it keeps the object alive without pinning
+its address. A `ConditionalWeakTable` joins separate leases for the same object,
+so releasing the final lease of an owned object calls `IDisposable.Dispose` once.
+
+The C++ RAII wrapper must be the only owner of each handle value. GCHandle slots
+can be reused after `Free`, so the ABI cannot safely validate a stale or invented
+value. Do not retain raw handles beyond the wrapper lifetime or call `RELEASE`
+twice. The registry-based baseline branch provides checked, never-reused IDs if
+untrusted or manually managed ABI callers need stale-handle rejection.
 
 Objects created through `type.create` are owned. Objects returned by methods or
 properties are borrowed unless that identity is already owned; `take_ownership()`

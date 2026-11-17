@@ -1,9 +1,12 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Interop.Managed;
 
-// Each export gets a fresh token. Identity tracking joins aliases so an owned
-// IDisposable is disposed exactly once after its final lease, including returns.
+// Each exported lease is a normal (non-pinned) GCHandle to an identity record.
+// C++ owns the lease through object_state and releases it with RAII. The identity
+// record lets aliases share the same disposal policy even though they have
+// different GCHandles.
 internal static class Handles
 {
     private sealed class Entry(object target)
@@ -14,9 +17,8 @@ internal static class Handles
     }
 
     private static readonly object Gate = new();
-    private static readonly Dictionary<ulong, Entry> Leases = [];
     private static readonly ConditionalWeakTable<object, Entry> Identities = new();
-    private static ulong next;
+    private static long liveHandles;
 
     public static ulong Export(object target, bool owned)
     {
@@ -24,42 +26,48 @@ internal static class Handles
         {
             Entry entry = Identities.GetValue(target, static key => new Entry(key));
             if (entry.Disposed) throw new ObjectDisposedException(target.GetType().FullName);
-            if (next == ulong.MaxValue) throw new OverflowException("Object lease space exhausted.");
-            ulong token = ++next;
-            Leases.Add(token, entry);
+            GCHandle handle = GCHandle.Alloc(entry);
             entry.References++;
             entry.Owned |= owned;
-            return token;
+            liveHandles++;
+            return unchecked((ulong)GCHandle.ToIntPtr(handle).ToInt64());
         }
+    }
+
+    // The ABI accepts handles only from this bridge and only while their C++
+    // object_state is alive. GCHandle cannot validate an arbitrary or stale token.
+    private static (GCHandle Handle, Entry Entry) Find(ulong token)
+    {
+        if (token == 0) throw new ArgumentException("Null object handle.");
+        GCHandle handle = GCHandle.FromIntPtr(new IntPtr(unchecked((long)token)));
+        return (handle, handle.Target as Entry ?? throw new ArgumentException("Invalid object handle."));
     }
 
     public static object Get(ulong token)
     {
         lock (Gate)
         {
-            Entry entry = Find(token);
+            Entry entry = Find(token).Entry;
             if (entry.Disposed) throw new ObjectDisposedException(entry.Target.GetType().FullName);
             return entry.Target;
         }
     }
-
-    private static Entry Find(ulong token) => Leases.TryGetValue(token, out Entry? entry)
-        ? entry : throw new ArgumentException($"Unknown or released object lease {token}.");
 
     public static void Release(ulong token)
     {
         object? dispose = null;
         lock (Gate)
         {
-            Entry entry = Find(token);
-            Leases.Remove(token);
+            (GCHandle handle, Entry entry) = Find(token);
+            handle.Free();
+            liveHandles--;
             if (--entry.References == 0 && entry.Owned && !entry.Disposed)
             {
                 entry.Disposed = true;
                 dispose = entry.Target;
             }
         }
-        // Never execute user code while holding the registry lock.
+        // Never execute user code while holding the bridge lock.
         (dispose as IDisposable)?.Dispose();
     }
 
@@ -68,7 +76,7 @@ internal static class Handles
         object? dispose;
         lock (Gate)
         {
-            Entry entry = Find(token);
+            Entry entry = Find(token).Entry;
             if (entry.Disposed) return;
             entry.Disposed = true;
             dispose = entry.Target;
@@ -80,11 +88,11 @@ internal static class Handles
     {
         lock (Gate)
         {
-            Entry entry = Find(token);
+            Entry entry = Find(token).Entry;
             if (entry.Disposed) throw new ObjectDisposedException(entry.Target.GetType().FullName);
             entry.Owned = true;
         }
     }
 
-    public static long Count { get { lock (Gate) return Leases.Count; } }
+    public static long Count { get { lock (Gate) return liveHandles; } }
 }

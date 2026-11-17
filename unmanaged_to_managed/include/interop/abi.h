@@ -54,7 +54,9 @@ extern "C"
     };
 
     /* UTF-8 and array storage is borrowed in requests and owned in results.
-       scalar stores integers, IEEE float bits, or an opaque, never-reused lease ID.
+       scalar stores integers, IEEE float bits, or an opaque GCHandle lease value.
+       Object handles are valid only until their matching INTEROP_RELEASE call;
+       callers must never replay a released handle or invent a handle value.
        data/length describe UTF-8 bytes or interop_value elements; no NUL terminator.
        Reserved fields must be zero. ABI v1 supports 64-bit processes only. */
     typedef struct interop_value

@@ -61,7 +61,7 @@ Write down these decisions before code grows:
 | Success/failure | Zero status succeeds; nonzero status fails |
 | Request buffers | Caller owns them until the call returns |
 | Result buffers | Callee allocates; callee's cleanup function frees |
-| Objects | Opaque lease IDs, never raw object addresses |
+| Objects | Opaque leases, never raw managed object addresses |
 
 **Done when:** both executables run as 64-bit processes and the native DLL builds
 without managed extensions. Save this as the first working checkpoint.
@@ -185,10 +185,13 @@ and [managed value conversion](../managed_to_umanaged/managed/Interop.Native/Mar
 the result. Free failed results as well as successful ones. Never call `delete`,
 `free`, or a different allocator on memory returned by the other component.
 
-Introduce a registry from monotonically issued lease IDs to strongly held objects.
-Native leases retain `std::shared_ptr<object>`; managed leases retain managed
-references. A value carrying an object uses a lease ID in `scalar`. Lookup and
-release validate the ID; an old ID must never silently select a new object.
+For C# → C++, introduce a registry from monotonically issued lease IDs to
+`std::shared_ptr<object>`. Lookup and release validate the ID; an old ID must
+never silently select a new object. For C++ → C#, this branch instead puts a
+normal `GCHandle` value in `scalar` for each exported lease. The handle roots a
+managed identity record, and a `ConditionalWeakTable` joins aliases for disposal.
+The C++ RAII wrapper releases each GCHandle exactly once. GCHandle slots may be
+reused, so raw ABI callers must never use an expired or invented handle value.
 
 Decide what happens if a caller fails to decode a result. In this repository a
 result owns every exported lease until the caller adopts it: after taking ownership,
@@ -203,9 +206,10 @@ request. Copying a wrapper and exporting another lease are distinct operations.
 
 **Done when:** an alias survives release of its sibling; the last owner destroys
 the native object exactly once. Abandoning a result releases its leases. Decoding
-to the wrong C# result type leaks nothing. Repeated cleanup is safe, and stale IDs
-fail on lookup. Releasing an already released ID must not destroy another object.
-Compare the live-lease count with the baseline after each test scope.
+to the wrong C# result type leaks nothing. Repeated result cleanup is safe, and
+stale native registry IDs fail on lookup. Managed GCHandle leases must be released
+exactly once by their C++ owner. Compare the live-lease count with the baseline
+after each test scope.
 
 **Reference:** [native registry](../managed_to_umanaged/src/interop.cpp),
 [SafeHandle and module ownership](../managed_to_umanaged/managed/Interop.Native/Module.cs),
@@ -251,8 +255,8 @@ and [managed public wrappers](../managed_to_umanaged/managed/Interop.Native/Nati
 
 ## 6. Let a native executable obtain managed callbacks
 
-**Build:** implement the other direction with a separate ABI and registry. Reuse
-the design rules, not lease IDs or request structs: the two repository ABIs have
+**Build:** implement the other direction with a separate ABI and GCHandle leases.
+Reuse the design rules, not lease values or request structs: the two repository ABIs have
 different operations and layouts. A managed application already has a CLR; this
 milestone addresses a native executable that needs to initialize the Framework CLR.
 
@@ -312,7 +316,7 @@ int main() {
 
 Creation follows `type::create` → `perform(INTEROP_CONSTRUCT)` → `Bridge.Invoke`
 → `Binding.Invoke` → `ConstructorInfo.Invoke` → export lease → C++ `object`.
-Subsequent calls carry that object's lease ID instead of the type's lease ID.
+Subsequent calls carry that object's GCHandle lease value instead of the type's.
 
 Specify disposal separately from reachability. In this repository constructed
 objects are owned and final lease release disposes `IDisposable`; returned objects
@@ -329,7 +333,7 @@ and [C++ public API](../unmanaged_to_managed/include/interop/interop.hpp).
 
 ## 8. Prove cleanup, threading, and deployment
 
-**Build:** turn the milestone checks into automated integration tests. Registry
+**Build:** turn the milestone checks into automated integration tests. Bridge
 locking protects lease bookkeeping, not mutable application objects. Keep a target
 alive throughout its call, then synchronize its state inside the adapter or domain
 class. Document any required UI thread or COM apartment; the bridge does not
@@ -366,7 +370,7 @@ Treat the following as separate milestones driven by application needs:
 | Capability | Current implementation | Possible next milestone |
 | --- | --- | --- |
 | Overloads | Managed reflection with exact signatures; native adapters choose their rules | Generate typed application facades |
-| Object exchange | Leases belong to their direction/registry; native handles are scoped to a `NativeRuntime` | Explicit application adapters between boundaries |
+| Object exchange | Leases belong to their direction; native IDs are scoped to a `NativeRuntime`, managed GCHandles to the CLR | Explicit application adapters between boundaries |
 | `ref` / `out` and raw pointers | Managed binder excludes by-reference and pointer method signatures | Define copy-in/copy-out values and ownership first |
 | Events and callbacks | No public event subscription or delegate transport protocol | Add registration tokens, rooting, cancellation, and teardown tests |
 | Async operations | Calls are synchronous; no automatic `Task` awaiting | Design operation handles and completion/cancellation semantics |
