@@ -2,11 +2,14 @@ using System.Reflection;
 
 namespace Interop.Managed;
 
+// Selects public .NET members by reflection and invokes the best match.
 internal static class Binding
 {
+    // Choose public static or instance members, including inherited members.
     public static BindingFlags Flags(bool isStatic) => BindingFlags.Public | BindingFlags.FlattenHierarchy |
         (isStatic ? BindingFlags.Static : BindingFlags.Instance);
 
+    // Match and invoke a constructor or method using decoded arguments.
     public static object? Invoke(Type type, object? target, string name, object?[] arguments,
         string[]? signature, string[] genericTypes, bool construct)
     {
@@ -47,6 +50,7 @@ internal static class Binding
         }
         if (candidates.Count == 0) throw new MissingMethodException(
             $"No public matching {(construct ? "constructor" : name)} on {type}. Numeric widths must match; supply parameter_types to select an overload.");
+        // Prefer the cheapest conversions, then the most specific parameter types.
         int best = candidates.Min(c => c.Score);
         var finalists = candidates.Where(c => c.Score == best).ToArray();
         var winners = finalists.Where(c => finalists.All(other => c.Method == other.Method || MoreSpecific(c.Method, other.Method))).ToArray();
@@ -56,6 +60,7 @@ internal static class Binding
             ((MethodInfo)winner.Method).Invoke(target, winner.Arguments);
     }
 
+    // Check whether a's parameter types are strictly narrower than b's.
     private static bool MoreSpecific(MethodBase a, MethodBase b)
     {
         Type[] left = a.GetParameters().Select(p => p.ParameterType).ToArray();
@@ -64,6 +69,7 @@ internal static class Binding
             left.Zip(right, (l, r) => l != r).Any(different => different);
     }
 
+    // Check assignability and materialize arrays for a candidate parameter type.
     private static bool ConvertArgument(object? value, Type target, out object? converted, out int cost)
     {
         converted = value;
@@ -71,6 +77,7 @@ internal static class Binding
         Type? nullable = Nullable.GetUnderlyingType(target);
         if (value is null) return !target.IsValueType || nullable is not null;
         if (nullable is not null) target = nullable;
+        // Arrays arrive untyped; build the array required by this overload.
         if (value is ArrayArgument array)
         {
             if (target == typeof(object)) { converted = Materialize(array); cost = 10; return true; }
@@ -91,9 +98,11 @@ internal static class Binding
         return true;
     }
 
+    // Turn nested ABI array placeholders into object arrays.
     private static object?[] Materialize(ArrayArgument array) => array.Items.Select(v =>
         v is ArrayArgument nested ? Materialize(nested) : v).ToArray();
 
+    // Read or write a public property or field on a type or instance.
     public static object? Member(Type type, object? target, string name, bool set, object?[] arguments)
     {
         if (arguments.Length != (set ? 1 : 0)) throw new ArgumentException("Invalid member argument count.");

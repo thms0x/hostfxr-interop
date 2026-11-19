@@ -17,6 +17,7 @@ extern "C"
 
 #define INTEROP_ABI_VERSION 2u
 
+    /* Identifies which interop_value payload is present. */
     enum interop_kind
     {
         INTEROP_NULL,
@@ -37,6 +38,7 @@ extern "C"
         INTEROP_CHAR16
     };
 
+    /* Selects the managed action performed by one request. */
     enum interop_operation
     {
         INTEROP_LOAD_TYPE = 1,
@@ -67,6 +69,7 @@ extern "C"
         int64_t length;
     } interop_value;
 
+    /* One native-to-managed operation and its encoded inputs. */
     typedef struct interop_request
     {
         uint32_t size;
@@ -81,6 +84,7 @@ extern "C"
         interop_value generic_types;
     } interop_request;
 
+    /* One encoded return value or managed error diagnostics. */
     typedef struct interop_result
     {
         interop_value value;
@@ -96,6 +100,7 @@ extern "C"
     typedef int32_t(INTEROP_CALLCONV *interop_invoke_fn)(const interop_request *, interop_result *);
     typedef void(INTEROP_CALLCONV *interop_free_result_fn)(interop_result *);
 
+    /* Callback table initialized by the managed bridge at startup. */
     typedef struct interop_api
     {
         uint32_t size;
@@ -104,6 +109,7 @@ extern "C"
         interop_free_result_fn free_result;
     } interop_api;
 
+    /* Modern .NET entry point that fills a version-checked callback table. */
     typedef int32_t(INTEROP_CALLCONV *interop_get_api_fn)(uint32_t, uint32_t, interop_api *);
 
 #ifdef __cplusplus

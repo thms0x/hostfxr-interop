@@ -9,7 +9,7 @@ include(CTest)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DotNet.cmake")
 find_package(Threads REQUIRED)
 
-add_library(interop STATIC src/interop.cpp)
+add_library(interop STATIC src/hosting.cpp src/interop.cpp)
 add_library(interop::interop ALIAS interop)
 set_target_properties(interop PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(interop PUBLIC cxx_std_17)

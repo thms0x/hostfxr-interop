@@ -8,6 +8,35 @@ with optional modern .NET 8+ support.
 | Unmanaged → managed | C++ application | .NET objects through CLR hosting and reflection | [unmanaged_to_managed](unmanaged_to_managed/README.md) |
 | Managed → unmanaged | C# application | Registered C++ objects in a native library | [managed_to_umanaged](managed_to_umanaged/README.md) |
 
+## System overview
+
+```mermaid
+flowchart LR
+    subgraph Forward["C++ calls C#"]
+        FApp["C++ application"] --> FWrapper["C++ runtime, type, object"]
+        FWrapper <--> FAbi["C ABI request / result"]
+        FAbi <--> FBridge["Managed bridge: marshalling, type lookup, reflection"]
+        FBridge <--> FTarget["C# objects"]
+        FWrapper -. "starts CLR / gets callbacks" .-> FBridge
+    end
+
+    subgraph Reverse["C# calls C++"]
+        RApp["C# application"] --> RWrapper["NativeRuntime, NativeType, NativeObject"]
+        RWrapper <--> RAbi["C ABI request / result"]
+        RAbi <--> RBridge["Native bridge: dispatch, registry, adapters"]
+        RBridge <--> RTarget["Registered C++ objects"]
+        RWrapper -. "loads DLL / gets callbacks" .-> RBridge
+    end
+```
+
+These are independent paths, not one shared object model. For C++ → C#, the C++
+runtime wrapper starts the CLR once, obtains bridge callbacks, and then sends
+requests to the managed bridge. Managed objects return as GCHandle tokens that
+the C++ wrappers release. For C# → C++, the CLR is already running; the C# wrapper
+loads a native library, sends requests to its registered adapters, and releases
+returned native leases through `SafeHandle`. Handles from one path cannot be used
+in the other.
+
 The folder name `managed_to_umanaged/` is retained as requested. Each folder has
 its own CMake project, public interface, examples, tests, and architecture and
 flow diagrams.
@@ -15,7 +44,9 @@ flow diagrams.
 ```text
 unmanaged_to_managed/
   include/interop/          C++ caller API and C ABI
-  src/interop.cpp          CLR startup, ABI calls, C++ wrappers, RAII release
+  src/hosting.cpp          CLR startup and managed callback discovery
+  src/interop.cpp          ABI calls, C++ wrappers, RAII release
+  src/internal.hpp         Private declarations shared by both source files
   managed/Interop.Managed/ Managed reflection bridge
   examples/                C++ application
   tests/                   Native integration tests and managed fixture

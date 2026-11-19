@@ -3,19 +3,24 @@ using System.Text;
 
 namespace Interop.Managed;
 
+// Defers choosing an incoming array's element type until overload binding.
 internal sealed class ArrayArgument(object?[] items)
 {
     public object?[] Items { get; } = items;
 }
 
+// Converts between ABI payloads and ordinary managed values in both directions.
 internal static unsafe class Marshalling
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private const int MaxDepth = 32;
 
+    // Reinterpret a float payload without a numeric conversion.
     private static float FloatFromBits(uint bits) => *(float*)&bits;
+    // Store a float's IEEE bits in the ABI scalar field.
     private static uint FloatBits(float value) => *(uint*)&value;
 
+    // Allocate and initialize ABI slots for an outgoing array.
     private static void* AllocateArray(int length)
     {
         var values = (AbiValue*)Marshal.AllocHGlobal(checked(length * sizeof(AbiValue)));
@@ -23,6 +28,7 @@ internal static unsafe class Marshalling
         return values;
     }
 
+    // Decode a validated UTF-8 ABI value into a C# string.
     public static string Text(in AbiValue value)
     {
         if (value.Kind != Kind.Utf8) throw new ArgumentException("Expected a UTF-8 string.");
@@ -30,12 +36,14 @@ internal static unsafe class Marshalling
         return value.Length == 0 ? string.Empty : Utf8.GetString((byte*)value.Data, (int)value.Length);
     }
 
+    // Reject invalid lengths and missing data pointers before reading memory.
     private static void ValidateBuffer(in AbiValue value)
     {
         if (value.Length < 0 || value.Length > int.MaxValue || (value.Length != 0 && value.Data == null))
             throw new ArgumentException("Invalid buffer length or null buffer.");
     }
 
+    // Decode one native value, resolving object tokens through Handles.
     public static object? Read(in AbiValue v, int depth = 0)
     {
         if (depth > MaxDepth) throw new ArgumentException("Value nesting exceeds 32 levels.");
@@ -62,6 +70,7 @@ internal static unsafe class Marshalling
         };
     }
 
+    // Decode an ABI array while enforcing the nesting limit.
     public static object?[] ReadArray(in AbiValue value, int depth = 0)
     {
         if (value.Kind != Kind.Array) throw new ArgumentException("Expected an array.");
@@ -72,15 +81,16 @@ internal static unsafe class Marshalling
         return items;
     }
 
+    // Decode optional type-name arrays used by reflection binding.
     public static string[] Strings(in AbiValue value) => value.Kind == Kind.Null ? [] :
         ReadArray(value).Select(v => v as string ?? throw new ArgumentException("Expected type names.")).ToArray();
 
+    // Encode a result; constructors force an object handle even for scalar types.
     public static void Write(ref AbiValue destination, object? value, bool forceObject = false, int depth = 0)
     {
         if (depth > MaxDepth) throw new ArgumentException("Value nesting exceeds 32 levels (possibly a cyclic array).");
         destination = default;
-        // Constructors always return an object lease, including boxed structs,
-        // strings, and arrays. Subsequent method results use value marshalling.
+        // Keep constructor results addressable for later instance calls.
         if (forceObject && value is not null)
         {
             destination.Scalar = Handles.Export(value);
@@ -123,7 +133,7 @@ internal static unsafe class Marshalling
         }
     }
 
-    // Free only unadopted result handles; explicit Dispose is a separate operation.
+    // Free response allocations and unadopted handles; Dispose is separate.
     public static void Free(ref AbiValue value)
     {
         if (value.Kind == Kind.Array)

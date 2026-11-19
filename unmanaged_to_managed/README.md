@@ -52,15 +52,18 @@ Subsequent calls use those pointers directly. `Components` finds managed types,
 `Binding` uses reflection to select and invoke their members, and `Handles` keeps
 exported objects alive while C++ holds leases.
 
-The C++ implementation has one public header and one source file. Start at
-`interop::object` in the header, then follow `object_lease` and `runtime_core` in
-the source. The C ABI is declared separately because the managed bridge also uses
-its layouts.
+The C++ implementation has one public wrapper header and two source files. Start
+at `interop::object` in the header, then follow `object_lease` and `runtime_core`
+in `interop.cpp`. CLR startup and callback discovery are in `hosting.cpp`; their
+shared declarations are private to `src/internal.hpp`. The C ABI is declared
+separately because the managed bridge also uses its layouts.
 
 | File | Start here for |
 | --- | --- |
 | [interop.hpp](include/interop/interop.hpp) | Public C++ `runtime`, `type`, and `object` wrappers |
-| [interop.cpp](src/interop.cpp) | CLR startup, ABI transport, wrapper methods, and lease release |
+| [hosting.cpp](src/hosting.cpp) | .NET Framework and hostfxr startup, managed callback discovery |
+| [interop.cpp](src/interop.cpp) | ABI transport, wrapper methods, and lease release |
+| [internal.hpp](src/internal.hpp) | Private declarations shared by the two source files |
 | [abi.h](include/interop/abi.h) | C ABI layout and ownership rules |
 | [Bridge.cs](managed/Interop.Managed/Bridge.cs) | Managed request dispatch |
 | [Handles.cs](managed/Interop.Managed/Handles.cs) | Direct GCHandle allocation, lookup, release, and explicit disposal |

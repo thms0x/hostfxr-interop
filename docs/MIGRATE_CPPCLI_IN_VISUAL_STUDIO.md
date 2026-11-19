@@ -281,8 +281,10 @@ runtime if objects must be passed to one another: handles from separate
 
 Create another **Static Library** project, `ManagedInteropCore`:
 
-- Compile `unmanaged_to_managed/src/interop.cpp` with
+- Compile `unmanaged_to_managed/src/hosting.cpp` and
+  `unmanaged_to_managed/src/interop.cpp` with
   `unmanaged_to_managed/include` on its include path.
+- Keep `unmanaged_to_managed/src/internal.hpp` alongside those source files.
 - Set Target Name to `interop`, producing `interop.lib`.
 - Add `INTEROP_NETFRAMEWORK` to the core's preprocessor definitions. This C++
   macro selects Framework hosting and differs from C#'s SDK-defined `NETFRAMEWORK`.
@@ -327,7 +329,7 @@ In a native EXE this bridge loads CLR v4 and bootstraps `Interop.Managed` in the
 default AppDomain. The `v4.0.30319` runtime identifier is also used by Framework
 4.8. The implementation retains its CLR host for process lifetime. It does not
 stop/restart the runtime when a C++ wrapper leaves scope. See the
-[host implementation](../unmanaged_to_managed/src/interop.cpp) and Microsoft's
+[host implementation](../unmanaged_to_managed/src/hosting.cpp) and Microsoft's
 [CLR hosting interface](https://learn.microsoft.com/en-us/dotnet/framework/unmanaged-api/hosting/iclrruntimehost-interface).
 
 If a native component is entered from an existing C# or C++/CLI host, identify the

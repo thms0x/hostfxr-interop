@@ -4,8 +4,10 @@ using System.Runtime.InteropServices;
 
 namespace Interop.Managed;
 
+// Validates native requests and routes them to type lookup, binding, or handles.
 internal static unsafe class Bridge
 {
+    // Execute one request and translate managed exceptions into a Result.
 #if !NETFRAMEWORK
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
 #endif
@@ -25,6 +27,7 @@ internal static unsafe class Bridge
         {
             // Remove partially written arrays and any exported object leases.
             Marshalling.Free(ref result->Value);
+            // Reflection wraps user exceptions; report the original failure.
             while (exception is TargetInvocationException { InnerException: not null } wrapped)
                 exception = wrapped.InnerException!;
             try
@@ -38,6 +41,7 @@ internal static unsafe class Bridge
         }
     }
 
+    // Select the operation and turn a target handle into a Type or instance.
     private static object? Dispatch(in Request request)
     {
         switch (request.Operation)
@@ -69,6 +73,7 @@ internal static unsafe class Bridge
 #if !NETFRAMEWORK
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
 #endif
+    // Release result buffers and any object handles C++ did not adopt.
     public static void FreeResult(Result* result)
     {
         if (result == null) return;
