@@ -95,12 +95,14 @@ namespace interop
             HMODULE module = LoadLibraryW(path.data());
             if (!module)
                 throw std::runtime_error("Cannot load hostfxr: " + std::to_string(GetLastError()));
-            auto symbol = [module](const char *name) { return GetProcAddress(module, name); };
+            auto symbol = [module](const char *name)
+            { return GetProcAddress(module, name); };
 #else
             void *module = dlopen(path.data(), RTLD_NOW | RTLD_LOCAL);
             if (!module)
                 throw std::runtime_error(std::string("Cannot load hostfxr: ") + dlerror());
-            auto symbol = [module](const char *name) { return dlsym(module, name); };
+            auto symbol = [module](const char *name)
+            { return dlsym(module, name); };
 #endif
             host_exports exports{
                 reinterpret_cast<hostfxr_initialize_for_runtime_config_fn>(
@@ -155,7 +157,8 @@ namespace interop
         }
 
 #else
-        template <class T> struct com_ptr
+        template <class T>
+        struct com_ptr
         {
             T *value = nullptr;
             ~com_ptr()
@@ -218,7 +221,8 @@ namespace interop
         }
 #endif
 
-        template <class To, class From> To bit_copy(const From &source) noexcept
+        template <class To, class From>
+        To bit_copy(const From &source) noexcept
         {
             static_assert(sizeof(To) == sizeof(From));
             static_assert(std::is_trivially_copyable_v<To> && std::is_trivially_copyable_v<From>);
