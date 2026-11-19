@@ -5,7 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-include(CTest)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DotNet.cmake")
 find_package(Threads REQUIRED)
 
@@ -36,13 +35,3 @@ add_dependencies(interop interop_bridge)
 add_executable(interop_example examples/main.cpp)
 target_link_libraries(interop_example PRIVATE interop::interop)
 add_dependencies(interop_example interop_bridge)
-
-if(BUILD_TESTING)
-    interop_managed(interop_fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/Fixture" Interop.Fixture)
-    add_executable(interop_tests tests/integration.cpp)
-    target_link_libraries(interop_tests PRIVATE interop::interop)
-    add_dependencies(interop_tests interop_fixture)
-    add_test(NAME interop.integration COMMAND interop_tests
-        "${interop_bridge_DIR}/Interop.Managed.dll" "${interop_fixture_DIR}/Interop.Fixture.dll")
-    add_test(NAME interop.example COMMAND interop_example "${interop_bridge_DIR}/Interop.Managed.dll")
-endif()

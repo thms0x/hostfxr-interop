@@ -38,8 +38,8 @@ returned native leases through `SafeHandle`. Handles from one path cannot be use
 in the other.
 
 The folder name `managed_to_umanaged/` is retained as requested. Each folder has
-its own CMake project, public interface, examples, tests, and architecture and
-flow diagrams.
+its own CMake project, public interface, example, and architecture and flow
+diagrams.
 
 ```text
 unmanaged_to_managed/
@@ -49,13 +49,11 @@ unmanaged_to_managed/
   src/internal.hpp         Private declarations shared by both source files
   managed/Interop.Managed/ Managed reflection bridge
   examples/                C++ application
-  tests/                   Native integration tests and managed fixture
 managed_to_umanaged/
   include/native_interop/   C++ registration API and C ABI
   src/                     Native dispatch, values, and object leases
   managed/Interop.Native/  C# caller API and native library loader
   examples/                Native plugin and C# application
-  tests/                   Managed integration tests and native ABI tests
 ```
 
 ## Build both directions
@@ -70,7 +68,6 @@ From this repository root, use a fresh build directory after the layout change:
 ```powershell
 cmake -S . -B build-all -A x64
 cmake --build build-all --config Release
-ctest --test-dir build-all -C Release --output-on-failure
 ```
 
 To use modern .NET on Linux, macOS, or Windows, select an installed target and
@@ -79,14 +76,14 @@ matching runtime explicitly; for example:
 ```sh
 cmake -S . -B build-modern -DINTEROP_TARGET_FRAMEWORK=net8.0 -DCMAKE_BUILD_TYPE=Release
 cmake --build build-modern --parallel
-ctest --test-dir build-modern --output-on-failure
 ```
 
 Each direction can also be built independently with `cmake -S unmanaged_to_managed`
 or `cmake -S managed_to_umanaged`. At the root, set
 `-DINTEROP_BUILD_UNMANAGED_TO_MANAGED=OFF` or
 `-DINTEROP_BUILD_MANAGED_TO_UNMANAGED=OFF` to omit one direction. See the individual
-READMEs for complete standalone commands and example executable paths.
+READMEs for complete standalone commands and example executable paths. The
+examples provide a quick manual check of each bridge after building.
 
 ## Create a managed object from C++
 

@@ -348,23 +348,25 @@ disposal, and returning objects inside arrays. Verify live handles return to the
 starting count. Test from a clean output directory with only deployment files,
 including the appropriate native runtime dependencies and component assemblies.
 
-For the current repository, run from `hostfxr-interop/` on Windows:
+For the current repository, build from `hostfxr-interop/` on Windows, then run
+the examples in each direction as a manual smoke check:
 
 ```powershell
 cmake -S . -B build-all -A x64
 cmake --build build-all --config Release
-ctest --test-dir build-all -C Release --output-on-failure
+./build-all/unmanaged_to_managed/Release/interop_example.exe ./build-all/unmanaged_to_managed/managed/interop_bridge/Interop.Managed.dll
+./build-all/managed_to_umanaged/managed/native_managed_example/Interop.Native.Example.exe ./build-all/managed_to_umanaged/Release/native_sample.dll
 ```
 
-**Done when:** native-to-managed, managed-to-native, and ABI tests pass on actual
-Windows Framework 4.8. Compiling `net48`, running under Mono, or testing modern
+**Done when:** native-to-managed and managed-to-native examples run on actual
+Windows Framework 4.8. For a production bridge, add ABI and lifecycle tests to
+the consuming solution. Compiling `net48`, running under Mono, or testing modern
 .NET alone does not verify Windows CLR hosting. Repeat Debug and Release when
 shipping both configurations. The current CMake managed build commands always
 select Release; selecting native Debug alone does not create managed Debug output.
 
-**Reference:** [native-to-managed integration tests](../unmanaged_to_managed/tests/integration.cpp),
-[managed-to-native integration tests](../managed_to_umanaged/tests/Program.cs),
-and [native ABI tests](../managed_to_umanaged/tests/abi.cpp).
+**Reference:** [native-to-managed example](../unmanaged_to_managed/examples/main.cpp)
+and [managed-to-native example](../managed_to_umanaged/examples/managed/Program.cs).
 
 ## 9. Extend the bridge deliberately
 

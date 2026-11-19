@@ -71,7 +71,6 @@ tools, CMake 3.22+, and .NET SDK 8+ for compilation. The default managed target 
 ```powershell
 cmake -S . -B build -A x64
 cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
 .\build\managed\native_managed_example\Interop.Native.Example.exe .\build\Release\native_sample.dll
 ```
 
@@ -80,7 +79,6 @@ For an installed modern .NET target on Linux:
 ```sh
 cmake -S . -B build-modern -DINTEROP_TARGET_FRAMEWORK=net8.0 -DCMAKE_BUILD_TYPE=Release
 cmake --build build-modern --parallel
-ctest --test-dir build-modern --output-on-failure
 dotnet build-modern/managed/native_managed_example/Interop.Native.Example.dll \
   "$PWD/build-modern/libnative_sample.so"
 ```

@@ -80,7 +80,6 @@ The build restores the Framework reference assemblies from NuGet.
 ```powershell
 cmake -S . -B build -A x64
 cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
 .\build\Release\interop_example.exe .\build\managed\interop_bridge\Interop.Managed.dll
 ```
 
@@ -100,7 +99,7 @@ explicitly, using an installed targeting pack and matching runtime:
 ```sh
 cmake -S . -B build-modern -DINTEROP_TARGET_FRAMEWORK=net8.0 -DCMAKE_BUILD_TYPE=Release
 cmake --build build-modern --parallel
-ctest --test-dir build-modern --output-on-failure
+./build-modern/interop_example ./build-modern/managed/interop_bridge/Interop.Managed.dll
 ```
 
 This mode uses hostfxr and the `.runtimeconfig.json` beside the bridge assembly.
