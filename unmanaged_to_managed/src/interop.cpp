@@ -33,9 +33,41 @@ namespace interop
         struct encoded_value
         {
             interop_value raw{};
-            std::vector<std::unique_ptr<encoded_value>> children;
+            std::vector<encoded_value> children;
             std::vector<interop_value> elements;
         };
+
+        // Borrow text for the duration of a synchronous managed call.
+        interop_value borrowed_text(std::string_view input)
+        {
+            interop_value raw{};
+            if (!input.empty())
+            {
+                raw.kind = INTEROP_UTF8;
+                raw.data = input.data();
+                raw.length = static_cast<std::int64_t>(input.size());
+            }
+            return raw;
+        }
+
+        // Borrow type names while retaining the ABI slots until invoke returns.
+        interop_value borrowed_names(const std::vector<std::string> &names, std::vector<interop_value> &slots)
+        {
+            slots.reserve(names.size());
+            for (const auto &name : names)
+            {
+                interop_value raw{};
+                raw.kind = INTEROP_UTF8;
+                raw.data = name.data();
+                raw.length = static_cast<std::int64_t>(name.size());
+                slots.push_back(raw);
+            }
+            interop_value array{};
+            array.kind = INTEROP_ARRAY;
+            array.data = slots.data();
+            array.length = static_cast<std::int64_t>(slots.size());
+            return array;
+        }
 
         // Copy a UTF-8 result or diagnostic from managed-owned memory.
         std::string text(const interop_value &raw)
@@ -72,59 +104,100 @@ namespace interop
         {
         }
 
-        // Encode a C++ value and keep nested buffers alive until invoke returns.
-        std::unique_ptr<encoded_value> encode(const value &input, int depth = 0)
+        // Encode one value with an explicit case for each ABI kind.
+        encoded_value encode(const value &input, int depth = 0)
         {
             if (depth > 32)
                 throw std::invalid_argument("Value nesting exceeds 32 levels");
-            auto encoded = std::make_unique<encoded_value>();
-            auto &raw = encoded->raw;
-            // The public variant order deliberately follows the ABI kind values.
-            raw.kind = static_cast<std::int32_t>(input.data().index());
-            std::visit(
-                [&](const auto &item)
+            encoded_value encoded;
+            auto &raw = encoded.raw;
+            const auto &data = input.data();
+            // The public variant order follows the ABI kind values.
+            raw.kind = static_cast<std::int32_t>(data.index());
+            switch (raw.kind)
+            {
+            case INTEROP_NULL:
+                break;
+            case INTEROP_BOOL:
+                raw.scalar = std::get<bool>(data);
+                break;
+            case INTEROP_I32:
+                raw.scalar = static_cast<std::uint64_t>(std::get<std::int32_t>(data));
+                break;
+            case INTEROP_I64:
+                raw.scalar = static_cast<std::uint64_t>(std::get<std::int64_t>(data));
+                break;
+            case INTEROP_U32:
+                raw.scalar = std::get<std::uint32_t>(data);
+                break;
+            case INTEROP_U64:
+                raw.scalar = std::get<std::uint64_t>(data);
+                break;
+            case INTEROP_F32:
+                raw.scalar = bit_copy<std::uint32_t>(std::get<float>(data));
+                break;
+            case INTEROP_F64:
+                raw.scalar = bit_copy<std::uint64_t>(std::get<double>(data));
+                break;
+            case INTEROP_UTF8:
+            {
+                const auto &text = std::get<std::string>(data);
+                raw.data = text.data();
+                raw.length = static_cast<std::int64_t>(text.size());
+                break;
+            }
+            case INTEROP_OBJECT:
+            {
+                const auto &object = std::get<interop::object>(data);
+                if (!object.lease_)
                 {
-                    using T = std::decay_t<decltype(item)>;
-                    if constexpr (std::is_same_v<T, std::monostate>)
-                    {
-                    }
-                    else if constexpr (std::is_integral_v<T>)
-                        raw.scalar = static_cast<std::uint64_t>(item);
-                    else if constexpr (std::is_same_v<T, float>)
-                        raw.scalar = bit_copy<std::uint32_t>(item);
-                    else if constexpr (std::is_same_v<T, double>)
-                        raw.scalar = bit_copy<std::uint64_t>(item);
-                    else if constexpr (std::is_same_v<T, std::string>)
-                    {
-                        raw.data = item.data();
-                        raw.length = static_cast<std::int64_t>(item.size());
-                    }
-                    else if constexpr (std::is_same_v<T, object>)
-                    {
-                        if (!item.lease_)
-                        {
-                            raw.kind = INTEROP_NULL;
-                            return;
-                        }
-                        if (item.lease_->core->api.invoke != api.invoke)
-                            throw std::invalid_argument(
-                                "Cannot pass objects between different managed bridge instances");
-                        raw.scalar = item.lease_->handle;
-                    }
-                    else if constexpr (std::is_same_v<T, value::array>)
-                    {
-                        encoded->children.reserve(item.size());
-                        encoded->elements.reserve(item.size());
-                        for (const auto &element : item)
-                        {
-                            encoded->children.push_back(encode(element, depth + 1));
-                            encoded->elements.push_back(encoded->children.back()->raw);
-                        }
-                        raw.data = encoded->elements.data();
-                        raw.length = static_cast<std::int64_t>(encoded->elements.size());
-                    }
-                },
-                input.data());
+                    raw.kind = INTEROP_NULL;
+                    break;
+                }
+                if (object.lease_->core->api.invoke != api.invoke)
+                    throw std::invalid_argument("Cannot pass objects between different managed bridge instances");
+                raw.scalar = object.lease_->handle;
+                break;
+            }
+            case INTEROP_ARRAY:
+                return encode_array(std::get<value::array>(data), depth);
+            case INTEROP_I8:
+                raw.scalar = static_cast<std::uint64_t>(std::get<std::int8_t>(data));
+                break;
+            case INTEROP_U8:
+                raw.scalar = std::get<std::uint8_t>(data);
+                break;
+            case INTEROP_I16:
+                raw.scalar = static_cast<std::uint64_t>(std::get<std::int16_t>(data));
+                break;
+            case INTEROP_U16:
+                raw.scalar = std::get<std::uint16_t>(data);
+                break;
+            case INTEROP_CHAR16:
+                raw.scalar = std::get<char16_t>(data);
+                break;
+            default:
+                throw std::invalid_argument("Unsupported native value kind");
+            }
+            return encoded;
+        }
+
+        // Keep nested ABI slots and their borrowed values alive during invoke.
+        encoded_value encode_array(const value::array &items, int depth = 0)
+        {
+            if (depth > 32)
+                throw std::invalid_argument("Value nesting exceeds 32 levels");
+            encoded_value encoded;
+            encoded.raw.kind = INTEROP_ARRAY;
+            encoded.children.reserve(items.size());
+            encoded.elements.reserve(items.size());
+            for (const auto &item : items)
+            {
+                encoded.children.push_back(encode(item, depth + 1));
+                encoded.elements.push_back(encoded.children.back().raw);
+            }
+            encoded.raw.data = encoded.elements.data();
+            encoded.raw.length = static_cast<std::int64_t>(encoded.elements.size());
             return encoded;
         }
 
@@ -190,40 +263,24 @@ namespace interop
 
         // Send one request, translate errors, and free its response on every path.
         value perform(int operation, const std::shared_ptr<object_lease> &target = {}, std::string_view name = {},
-                      value::array args = {}, const call_options &options = {}, std::string_view assembly = {})
+                      const value::array &args = {}, const call_options &options = {}, std::string_view assembly = {})
         {
             if (target && target->core->api.invoke != api.invoke)
                 throw std::invalid_argument("Object belongs to a different managed bridge");
-            value arguments(std::move(args));
-            value member = name.empty() ? value{} : value(name);
-            value assembly_name = assembly.empty() ? value{} : value(assembly);
-            value signature;
+            auto encoded_args = encode_array(args);
+            std::vector<interop_value> signature_slots;
+            std::vector<interop_value> generic_slots;
+            interop_request request{};
+            request.size = sizeof(request);
+            request.version = INTEROP_ABI_VERSION;
+            request.operation = operation;
+            request.target = target ? target->handle : 0;
+            request.name = borrowed_text(name);
+            request.assembly = borrowed_text(assembly);
+            request.arguments = encoded_args.raw;
             if (options.parameter_types)
-            {
-                value::array names;
-                for (const auto &item : *options.parameter_types)
-                    names.emplace_back(item);
-                signature = value(std::move(names));
-            }
-            value::array generics;
-            for (const auto &item : options.generic_types)
-                generics.emplace_back(item);
-            value generic_names(std::move(generics));
-            auto encoded_args = encode(arguments);
-            auto encoded_member = encode(member);
-            auto encoded_assembly = encode(assembly_name);
-            auto encoded_signature = encode(signature);
-            auto encoded_generics = encode(generic_names);
-            interop_request request{sizeof(interop_request),
-                                    INTEROP_ABI_VERSION,
-                                    operation,
-                                    0,
-                                    target ? target->handle : 0,
-                                    encoded_member->raw,
-                                    encoded_assembly->raw,
-                                    encoded_args->raw,
-                                    encoded_signature->raw,
-                                    encoded_generics->raw};
+                request.parameter_types = borrowed_names(*options.parameter_types, signature_slots);
+            request.generic_types = borrowed_names(options.generic_types, generic_slots);
             interop_result result{};
             // Free result buffers even if decoding or error translation throws.
             struct result_guard
@@ -273,11 +330,7 @@ namespace interop
         core->release(handle);
     }
 
-    object::~object()
-    {
-        // Copies share lease_; its final owner runs object_lease::~object_lease.
-        lease_.reset();
-    }
+    object::~object() = default;
 
     value object::call(std::string_view name, std::initializer_list<value> args, const call_options &options) const
     {
@@ -286,7 +339,7 @@ namespace interop
     value object::call(std::string_view name, const std::vector<value> &args, const call_options &options) const
     {
         const auto lease = runtime_core::require(*this);
-        return lease->core->perform(INTEROP_CALL, lease, name, {args.begin(), args.end()}, options);
+        return lease->core->perform(INTEROP_CALL, lease, name, args, options);
     }
     value object::get(std::string_view name) const
     {
@@ -310,7 +363,7 @@ namespace interop
     object type::create(const std::vector<value> &args, const call_options &options) const
     {
         const auto lease = runtime_core::require(target_);
-        return lease->core->perform(INTEROP_CONSTRUCT, lease, {}, {args.begin(), args.end()}, options).as<object>();
+        return lease->core->perform(INTEROP_CONSTRUCT, lease, {}, args, options).as<object>();
     }
     value type::call(std::string_view name, std::initializer_list<value> args, const call_options &options) const
     {
@@ -319,7 +372,7 @@ namespace interop
     value type::call(std::string_view name, const std::vector<value> &args, const call_options &options) const
     {
         const auto lease = runtime_core::require(target_);
-        return lease->core->perform(INTEROP_CALL_STATIC, lease, name, {args.begin(), args.end()}, options);
+        return lease->core->perform(INTEROP_CALL_STATIC, lease, name, args, options);
     }
     value type::get(std::string_view name) const
     {
