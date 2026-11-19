@@ -53,7 +53,7 @@ Subsequent calls use those pointers directly. `Components` finds managed types,
 exported objects alive while C++ holds leases.
 
 The C++ implementation has one public wrapper header and two source files. Start
-at `interop::object` in the header, then follow `object_lease` and `runtime_core`
+at `interop::object` in the header, then follow `handle_state` and `runtime_core`
 in `interop.cpp`. CLR startup and callback discovery are in `hosting.cpp`; their
 shared declarations are private to `src/internal.hpp`. The C ABI is declared
 separately because the managed bridge also uses its layouts.
@@ -185,7 +185,7 @@ sequenceDiagram
     Handles->>Handles: Allocate GCHandle for object
     Handles-->>Bridge: Object handle in result.Value
     Bridge-->>Native: Status 0 and object result
-    Native->>Native: Decode into object_lease and clear result.Value scalar
+    Native->>Native: Decode into handle_state and clear result.Value scalar
     Native->>Bridge: free_result (adopted handle preserved)
     Native-->>App: interop::object managedObject
     opt Explicit managedObject.dispose()
@@ -194,7 +194,7 @@ sequenceDiagram
         Bridge->>Handles: Call IDisposable.Dispose()
     end
     opt reset() or final C++ copy leaves scope
-        App->>Native: Destroy object_lease
+        App->>Native: Destroy handle_state
         Native->>Bridge: invoke(INTEROP_RELEASE, object handle)
         Bridge->>Handles: Free GCHandle lease
     end
@@ -321,12 +321,22 @@ the statement. `ToString` returns a copied string instead.
 
 ### Object lifetime and cleanup
 
-Copying an `interop::object` shares its existing C++ lease. Its declared destructor
-is implemented in `interop.cpp`; the final copy destroys `object_lease`, which calls
-`runtime_core::release` and sends `INTEROP_RELEASE` to `Handles.Release`. Each
+Each `interop::object` holds a `std::shared_ptr<handle_state>`. The state stores
+the exported GCHandle value and a `std::shared_ptr<runtime_core>` so the bridge
+callbacks remain available for release. Copying an object copies the shared
+pointer, not the GCHandle. `reset()` drops one copy's pointer. When the last copy
+is reset or destroyed, `handle_state::~handle_state` calls
+`runtime_core::release`, which sends `INTEROP_RELEASE` to `Handles.Release`. Each
 exported lease is a normal GCHandle directly to the managed object. It keeps the
 object alive without pinning its address. Separate exports of the same object get
 separate handles, which are released independently.
+
+```cpp
+auto first = someType.create();
+auto second = first; // Both wrappers share one handle_state and one GCHandle.
+first.reset();       // second still owns the state; the handle remains valid.
+second.reset();      // Last owner: release the GCHandle through the bridge.
+```
 
 The C++ RAII wrapper must be the only owner of each handle value. GCHandle slots
 can be reused after `Free`, so the ABI cannot safely validate a stale or invented

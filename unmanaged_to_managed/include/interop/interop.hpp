@@ -16,7 +16,7 @@
 namespace interop
 {
     class runtime_core;
-    class object_lease;
+    class handle_state;
     class value;
     class type;
 
@@ -43,7 +43,7 @@ namespace interop
         std::vector<std::string> generic_types;
     };
 
-    // Holds a C++ lease on a managed instance; copies share that same lease.
+    // Shares one managed handle across C++ copies.
     // Release does not call IDisposable.Dispose; call dispose() when needed.
     class object
     {
@@ -55,10 +55,10 @@ namespace interop
         object &operator=(object &&) noexcept = default;
         // Release the managed GCHandle when the final C++ copy goes away.
         ~object();
-        // Check whether this wrapper holds a managed object lease.
-        explicit operator bool() const noexcept { return bool(lease_); }
-        // Drop this copy's lease without disposing the managed object.
-        void reset() noexcept { lease_.reset(); }
+        // Check whether this wrapper holds a managed object handle.
+        explicit operator bool() const noexcept { return bool(state_); }
+        // Drop this copy's ownership without disposing the managed object.
+        void reset() noexcept { state_.reset(); }
         // Invoke an instance method with a short argument list.
         value call(std::string_view name, std::initializer_list<value> args = {},
                    const call_options &options = {}) const;
@@ -73,14 +73,14 @@ namespace interop
         void dispose() const;
 
     private:
-        // Adopt a lease returned by runtime_core after decoding a result.
-        explicit object(std::shared_ptr<object_lease> lease) : lease_(std::move(lease)) {}
-        std::shared_ptr<object_lease> lease_;
+        // Adopt the handle state created when decoding a result.
+        explicit object(std::shared_ptr<handle_state> state) : state_(std::move(state)) {}
+        std::shared_ptr<handle_state> state_;
         friend class runtime_core;
         friend class type;
     };
 
-    // Stores one supported ABI value, including arrays and managed object leases.
+    // Stores one supported ABI value, including arrays and managed object handles.
     class value
     {
     public:

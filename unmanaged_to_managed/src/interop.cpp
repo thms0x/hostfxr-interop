@@ -37,38 +37,6 @@ namespace interop
             std::vector<interop_value> elements;
         };
 
-        // Borrow text for the duration of a synchronous managed call.
-        interop_value borrowed_text(std::string_view input)
-        {
-            interop_value raw{};
-            if (!input.empty())
-            {
-                raw.kind = INTEROP_UTF8;
-                raw.data = input.data();
-                raw.length = static_cast<std::int64_t>(input.size());
-            }
-            return raw;
-        }
-
-        // Borrow type names while retaining the ABI slots until invoke returns.
-        interop_value borrowed_names(const std::vector<std::string> &names, std::vector<interop_value> &slots)
-        {
-            slots.reserve(names.size());
-            for (const auto &name : names)
-            {
-                interop_value raw{};
-                raw.kind = INTEROP_UTF8;
-                raw.data = name.data();
-                raw.length = static_cast<std::int64_t>(name.size());
-                slots.push_back(raw);
-            }
-            interop_value array{};
-            array.kind = INTEROP_ARRAY;
-            array.data = slots.data();
-            array.length = static_cast<std::int64_t>(slots.size());
-            return array;
-        }
-
         // Copy a UTF-8 result or diagnostic from managed-owned memory.
         std::string text(const interop_value &raw)
         {
@@ -81,17 +49,17 @@ namespace interop
         }
     } // namespace
 
-    // Own one exported handle; copies of interop::object share this lease.
-    class object_lease
+    // Hold one exported handle and keep its runtime callbacks alive.
+    class handle_state
     {
     public:
         std::shared_ptr<runtime_core> core;
         std::uint64_t handle;
         // Keep the runtime callbacks alive for the handle's full lifetime.
-        object_lease(std::shared_ptr<runtime_core> owner, std::uint64_t lease) : core(std::move(owner)), handle(lease)
+        handle_state(std::shared_ptr<runtime_core> owner, std::uint64_t value) : core(std::move(owner)), handle(value)
         {
         }
-        ~object_lease();
+        ~handle_state();
     };
 
     // Own the ABI callbacks and translate public C++ calls into requests.
@@ -149,14 +117,14 @@ namespace interop
             case INTEROP_OBJECT:
             {
                 const auto &object = std::get<interop::object>(data);
-                if (!object.lease_)
+                if (!object.state_)
                 {
                     raw.kind = INTEROP_NULL;
                     break;
                 }
-                if (object.lease_->core->api.invoke != api.invoke)
+                if (object.state_->core->api.invoke != api.invoke)
                     throw std::invalid_argument("Cannot pass objects between different managed bridge instances");
-                raw.scalar = object.lease_->handle;
+                raw.scalar = object.state_->handle;
                 break;
             }
             case INTEROP_ARRAY:
@@ -240,9 +208,9 @@ namespace interop
             {
                 if (!raw.scalar)
                     throw std::runtime_error("Managed bridge returned a zero object lease");
-                auto lease = std::make_shared<object_lease>(shared_from_this(), raw.scalar);
+                auto state = std::make_shared<handle_state>(shared_from_this(), raw.scalar);
                 raw.scalar = 0; // The result guard must not free an adopted lease.
-                return value(object(std::move(lease)));
+                return value(object(std::move(state)));
             }
             case INTEROP_ARRAY:
             {
@@ -262,25 +230,41 @@ namespace interop
         }
 
         // Send one request, translate errors, and free its response on every path.
-        value perform(int operation, const std::shared_ptr<object_lease> &target = {}, std::string_view name = {},
+        value perform(int operation, const std::shared_ptr<handle_state> &target = {}, std::string_view name = {},
                       const value::array &args = {}, const call_options &options = {}, std::string_view assembly = {})
         {
             if (target && target->core->api.invoke != api.invoke)
                 throw std::invalid_argument("Object belongs to a different managed bridge");
+            value member = name.empty() ? value{} : value(name);
+            value assembly_name = assembly.empty() ? value{} : value(assembly);
+            value signature;
+            if (options.parameter_types)
+            {
+                value::array names;
+                for (const auto &item : *options.parameter_types)
+                    names.emplace_back(item);
+                signature = value(std::move(names));
+            }
+            value::array generics;
+            for (const auto &item : options.generic_types)
+                generics.emplace_back(item);
+            value generic_names(std::move(generics));
+
+            auto encoded_member = encode(member);
+            auto encoded_assembly = encode(assembly_name);
             auto encoded_args = encode_array(args);
-            std::vector<interop_value> signature_slots;
-            std::vector<interop_value> generic_slots;
+            auto encoded_signature = encode(signature);
+            auto encoded_generics = encode(generic_names);
             interop_request request{};
             request.size = sizeof(request);
             request.version = INTEROP_ABI_VERSION;
             request.operation = operation;
             request.target = target ? target->handle : 0;
-            request.name = borrowed_text(name);
-            request.assembly = borrowed_text(assembly);
+            request.name = encoded_member.raw;
+            request.assembly = encoded_assembly.raw;
             request.arguments = encoded_args.raw;
-            if (options.parameter_types)
-                request.parameter_types = borrowed_names(*options.parameter_types, signature_slots);
-            request.generic_types = borrowed_names(options.generic_types, generic_slots);
+            request.parameter_types = encoded_signature.raw;
+            request.generic_types = encoded_generics.raw;
             interop_result result{};
             // Free result buffers even if decoding or error translation throws.
             struct result_guard
@@ -316,16 +300,16 @@ namespace interop
         }
 
         // Reject an empty wrapper before issuing an instance request.
-        static const std::shared_ptr<object_lease> &require(const object &target)
+        static const std::shared_ptr<handle_state> &require(const object &target)
         {
-            if (!target.lease_)
+            if (!target.state_)
                 throw std::invalid_argument("Cannot use an empty managed object");
-            return target.lease_;
+            return target.state_;
         }
     };
 
     // The managed GCHandle is freed only when the final C++ owner goes away.
-    object_lease::~object_lease()
+    handle_state::~handle_state()
     {
         core->release(handle);
     }
@@ -338,23 +322,23 @@ namespace interop
     }
     value object::call(std::string_view name, const std::vector<value> &args, const call_options &options) const
     {
-        const auto lease = runtime_core::require(*this);
-        return lease->core->perform(INTEROP_CALL, lease, name, args, options);
+        const auto state = runtime_core::require(*this);
+        return state->core->perform(INTEROP_CALL, state, name, args, options);
     }
     value object::get(std::string_view name) const
     {
-        const auto lease = runtime_core::require(*this);
-        return lease->core->perform(INTEROP_GET, lease, name);
+        const auto state = runtime_core::require(*this);
+        return state->core->perform(INTEROP_GET, state, name);
     }
     void object::set(std::string_view name, value v) const
     {
-        const auto lease = runtime_core::require(*this);
-        lease->core->perform(INTEROP_SET, lease, name, {std::move(v)});
+        const auto state = runtime_core::require(*this);
+        state->core->perform(INTEROP_SET, state, name, {std::move(v)});
     }
     void object::dispose() const
     {
-        const auto lease = runtime_core::require(*this);
-        lease->core->perform(INTEROP_DISPOSE, lease);
+        const auto state = runtime_core::require(*this);
+        state->core->perform(INTEROP_DISPOSE, state);
     }
     object type::create(std::initializer_list<value> args, const call_options &options) const
     {
@@ -362,8 +346,8 @@ namespace interop
     }
     object type::create(const std::vector<value> &args, const call_options &options) const
     {
-        const auto lease = runtime_core::require(target_);
-        return lease->core->perform(INTEROP_CONSTRUCT, lease, {}, args, options).as<object>();
+        const auto state = runtime_core::require(target_);
+        return state->core->perform(INTEROP_CONSTRUCT, state, {}, args, options).as<object>();
     }
     value type::call(std::string_view name, std::initializer_list<value> args, const call_options &options) const
     {
@@ -371,18 +355,18 @@ namespace interop
     }
     value type::call(std::string_view name, const std::vector<value> &args, const call_options &options) const
     {
-        const auto lease = runtime_core::require(target_);
-        return lease->core->perform(INTEROP_CALL_STATIC, lease, name, args, options);
+        const auto state = runtime_core::require(target_);
+        return state->core->perform(INTEROP_CALL_STATIC, state, name, args, options);
     }
     value type::get(std::string_view name) const
     {
-        const auto lease = runtime_core::require(target_);
-        return lease->core->perform(INTEROP_GET_STATIC, lease, name);
+        const auto state = runtime_core::require(target_);
+        return state->core->perform(INTEROP_GET_STATIC, state, name);
     }
     void type::set(std::string_view name, value v) const
     {
-        const auto lease = runtime_core::require(target_);
-        lease->core->perform(INTEROP_SET_STATIC, lease, name, {std::move(v)});
+        const auto state = runtime_core::require(target_);
+        state->core->perform(INTEROP_SET_STATIC, state, name, {std::move(v)});
     }
     runtime::runtime(const std::filesystem::path &bridge, const std::filesystem::path &dotnet_root)
         : core_(std::make_shared<runtime_core>(detail::bootstrap(bridge, dotnet_root)))
