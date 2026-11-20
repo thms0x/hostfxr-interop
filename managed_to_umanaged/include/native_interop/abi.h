@@ -81,8 +81,7 @@ extern "C"
         ni_free_result_fn free_result;
     } ni_api;
     typedef int32_t(NI_CALL *ni_get_api_fn)(uint32_t, uint32_t, ni_api *);
-    /* Each plugin exports exactly this C entry point. */
-    int32_t NI_CALL ni_get_api(uint32_t version, uint32_t size, ni_api *output);
+    /* Each plugin defines and exports ni_get_api with the ni_get_api_fn signature. */
 #ifdef __cplusplus
 }
 static_assert(sizeof(void *) == 8, "Native interop ABI requires a 64-bit process");
